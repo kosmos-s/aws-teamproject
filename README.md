@@ -2,7 +2,7 @@
 
 대학 과제용 AWS EC2 한 대에 Orca를 실제 배포하는 프로젝트.
 
-**현재: Orca AWS 배포·브라우저 파일 편집/실행·재부팅 복구 검증 완료. 포털/DB/모니터링/백업은 다음 단계.**
+**현재: 공개 HTTPS 포털·RDS·S3·모니터링·논리 백업/복구를 AWS에서 검증했습니다. AI 로그인과 3인 동시 접속은 미검증입니다.**
 
 - [진행 상태](STATUS.md)
 - [실제 검증과 시연 화면](docs/verification.md)
@@ -20,4 +20,10 @@
 
 `.local/`, `vendor/`, 데이터·인증정보는 소스 제출 ZIP이나 Git에 포함하지 않는다. 실제 자원 ID/프로필은 Git 제외 로컬 설정에 보관한다.
 
-저장소: [kosmos-s/aws-teamproject](https://github.com/kosmos-s/aws-teamproject). 공개 포털과 RDS·S3 연동은 구현 중이며, 설치된 Orca를 자체 개발한 것으로 주장하지 않는다. 현재의 localhost URL은 SSM 터널 주소로, 외부 공유 URL은 아직 제공하지 않는다.
+저장소: [kosmos-s/aws-teamproject](https://github.com/kosmos-s/aws-teamproject). 공개 포털과 RDS·S3 연동을 검증했습니다. 설치된 Orca와 자체 구현한 포털·운영 코드를 구분합니다. localhost는 Orca용 SSM 주소이고 공개 HTTPS 포털은 별도 서비스입니다. 운영 URL과 계정은 운영자가 전달합니다.
+
+- [포털 운영·복구](docs/portal-operations.md)
+- [데이터 모델](docs/data-model.md)
+- [발표 시연 순서](docs/demo-script.md)
+
+로컬 검증: Python 3.12 이상에서 가상환경 생성, `pip install -r requirements.lock`, `python -m unittest discover -s tests -v`.

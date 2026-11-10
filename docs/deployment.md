@@ -43,3 +43,13 @@ Codex CLI 0.167.0을 서버에 공식 고정 릴리스로 설치하고 SHA-256�
 
 ## 제한
 Orca 서비스 활성, 브라우저 사용, 실제 AI 요청, 3인 접속, 재부팅 복구는 각각 검증한다. 클라이언트의 AI 로그인은 서버에 자동 적용되지 않는다. 서버용 AI 인증을 새로 진행해야 하며 사용자 PC/SER8의 토큰은 복사하지 않는다.
+
+
+## 공개 운영 포털 추가 배포
+공개 진입 경로는 80/443이며 80은 HTTPS로 리다이렉트한다. Orca 6768과 SSH 인바운드는 열지 않았다.
+`app/`, `requirements.lock`, `deploy/portal-install.sh`와 systemd 단위는 `/opt/kosmos-portal`에 배포했다. 별도 비관리자 kosmos-portal 사용자와 loopback 8000을 사용한다.
+`/etc/kosmos-portal.env`는 root 0600이며 systemd EnvironmentFile로 읽는다. URL에 & 등이 포함되므로 이 파일을 셸 source로 실행하지 않는다.
+승인된 첫 RDS/S3 생성 코드는 `scripts/provision-portal.py`. 실행 전 기존 .local/portal-cloud.json과 AWS 자원을 반드시 확인한다. 부분 생성 후 무작정 재실행하지 않는다.
+서버 초기 설정은 `deploy/portal-configure.py`, 실제 데이터 검증은 `deploy/verify-portal.py`. 초기 설정은 새 DB 전용으로, 운영 중 반복 실행하지 않는다. DB 초기화용 SSM 읽기 권한은 설치 후 제거했다.
+Nginx 설정은 deploy/portal-nginx.conf의 도메인을 대체해 사용하고 Certbot으로 인증서를 적용했다. 최초 webroot 인증은 전환 시점의 challenge 경로 404로 실패했으며, 명시적 challenge 경로와 Nginx 플러그인 적용 후 발급·외부 HTTPS 검증에 성공했다.
+서비스 재시작 후 RDS·S3 유지와 별도 복구 검증을 재실행했다. 포털 계정 정보는 공개 Git에 올리지 않는다. 운영 명령과 복구는 docs/portal-operations.md를 따른다.

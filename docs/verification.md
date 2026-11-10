@@ -43,3 +43,19 @@
 
 ## 로컬 검사
 모든 PowerShell 스크립트 Parser 오류 0개, 배포/검증/데모/Codex 설치 셸 `bash -n` 통과. 이는 실제 AWS/브라우저 검증과 별도로 실행했다.
+
+
+## 2026-11-10 공개 포털·RDS·S3 검증
+- Nginx와 Let’s Encrypt HTTPS: 외부 agent-browser에서 인증서 오류 없이 로그인 화면·인증된 대시보드 확인. 인증서 만료 2027-02-08, Certbot 갱신 타이머 설정.
+- Windows 프로젝트 가상환경과 Ubuntu EC2에서 전체 unittest 17/17 통과. 테스트 클라이언트의 httpx 사용에 Starlette deprecation warning 1종이 있으며 테스트 실패는 아니다.
+- 실제 RDS MySQL 8.4.13에 프로젝트/메모 저장·재조회, 포털 서비스 재시작 후 유지 확인. TLS CA·호스트 검증, 전용 앱 DB 계정 사용.
+- S3 첨부 업로드·인증 다운로드 바이트 일치. 포털 익명 접근 401, S3 직접 익명 GET 403. 공개 차단 옵션 4개 모두 true.
+- 실제 백업 748바이트: 프로젝트·메모·첨부 각각 1개를 별도 빈 SQLite/폴더에 복원하고 새 계정으로 복구 앱에 로그인·다운로드 비교 성공. 운영 RDS 덮어쓰기나 PITR 시험은 하지 않았다.
+- 실제 Orca 서비스를 잠시 중지 → 점검 failed 기록 → EXIT 복구와 재시작 → 점검 ok 회복을 외부 HTTPS API에서 확인했다. 포털은 계속 응답했다.
+- 매분 점검, 매일 UTC 00:00 백업, 3일 보관 설정. 전체 S3 저장량 확인 시 객체 4개 2,288바이트. 첨부는 44바이트다.
+- 포털/nginx 활성, 자동 시작 설정 확인. 기존 EC2 자동 중지 예약 유지. RDS는 47초 먼저 중지 요청 예약. 실제 미래 종료는 미검증.
+- 계정 전달용 임시 IAM 쓰기 권한과 DB 초기화 비밀번호 읽기 권한 제거를 API로 확인했다.
+- 미검증: 실제 AI 요청, 3인 동시 접속, RDS 스냅샷/PITR 복원, 자동 종료 시각의 실제 발생.
+
+![공개 로그인 화면](public-evidence/portal-login.png)
+![인증된 운영 대시보드](public-evidence/portal-dashboard.png)

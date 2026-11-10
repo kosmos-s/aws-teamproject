@@ -1,0 +1,14 @@
+[Unit]
+Description=KOSMOS fixed service and host check
+After=kosmos-portal.service
+[Service]
+Type=oneshot
+User=kosmos-portal
+Group=kosmos-portal
+WorkingDirectory=/opt/kosmos-portal
+EnvironmentFile=/etc/kosmos-portal.env
+ExecStart=/opt/kosmos-portal/.venv/bin/python -m app.cli monitor
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kosmos-portal
