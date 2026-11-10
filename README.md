@@ -10,6 +10,9 @@
 - [비용과 24시간 자동 중지](docs/costs.md)
 - [구성도](docs/architecture.md)
 - [출처와 기여](docs/contributions.md)
+- [에이전트 작업 지침](AGENTS.md)
+- [Orca에서 GitHub 프로젝트 사용하기](docs/orca-workflow.md)
+- [강의 자료 검토와 보완안](docs/course-review.md)
 
 프로젝트 폴더에서 `.\scripts\connect.ps1` 실행 후 브라우저 `http://127.0.0.1:6768/` 접속. 현재 PC의 승인된 페어링은 브라우저에 저장되어 있다.
 
