@@ -33,3 +33,9 @@
 
 ## 팀 운영 기능 (로컬 구현)
 계정·역할·접속 회수, GitHub 자동 테스트, Git 코드 백업/복구, 외부 장애 알림과 비용·자원 현황을 추가했다. [사용·적용 절차](docs/team-operations.md)와 [Webmin 2FA 등록](docs/webmin-2fa.md)을 참고한다. 서버 재시작·배포, 원격 CI 실행, 실제 메일 발송·TOTP 등록은 아직 수행하지 않았다.
+
+## 2026-11-11 실제 배포 갱신
+팀 운영 기능을 AWS에 적용하고 관리자 API·운영 스냅샷·로그아웃 접근 회수를 확인했다. GitHub 기능 브랜치 push와 CI 실행이 성공했다. 강의 2장의 탄력적 IP를 기존 EC2에 연결했다. 현재 DNS 수정 대기이며, 고정 IP에 호스트 이름을 지정한 TLS 검증은 성공했다. AI 로그인·3인 동시 접속·실제 메일/TOTP 등록은 미완료다.
+
+## 2026-11-11 강의 시연 추가 검증
+사용자 추가 승인으로 ALB와 CloudFront/별도 비공개 S3 OAC를 실제 배포했다. ALB healthy·/health 200, CloudFront Deployed·HTTPS 200, S3 원본 403을 확인했다. 정상 DNS로 포털/Orca 연결, 공개 Orca 터미널 실행과 파일 저장·원본 복구, 로그아웃 후 활성 WebSocket 1008 종료(0.02초)를 검증했다. ALB/CloudFront 시연 자원은 오늘 13:47 종료 후 정리한다. [구성·검증·정리 범위](docs/course-demo.md)

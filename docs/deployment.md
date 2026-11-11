@@ -61,3 +61,10 @@ Nginx 설정은 deploy/portal-nginx.conf의 도메인을 대체해 사용하고 
 
 ## 팀 운영 추가 기능 (2026-11-11, 로컬)
 [팀 운영 절차](team-operations.md)에 적용 순서와 미적용 항목을 기록했다. 추가 유료 AWS 자원이나 알림 서비스를 생성하지 않았다. 로컬 구현·검증은 운영 배포/메일 발송/2FA 등록과 구분한다.
+
+## 2026-11-11 배포 갱신
+사용자 승인에 따라 기존 EC2/RDS를 재가동하고 091ca9c 릴리스를 적용했다. DB 시작을 기다리는 동안 앱을 멈추고, RDS available 확인 뒤 테이블 반영과 서비스 시작을 수행했다. 초기 자원 생성 스크립트나 DB 초기화는 재실행하지 않았다. EIP 1개를 기존 EC2에 연결했고 DNS A 레코드 변경은 운영자에게 전달했다. EIP 상태/주소는 .local/elastic-ip.json에 보관한다. 재실행 전 이 파일과 AWS describe-addresses를 먼저 확인해 중복 할당하지 않는다.
+승인된 종료 시각은 2026-11-11 13:47:23 KST다. EC2/RDS 각각 AWS Scheduler와 서버 타이머를 확인했으며 운영 시간을 늘리지 않았다. DNS를 우회한 TLS 검증과 일반 DNS 접속 성공은 구분한다.
+
+## 2026-11-11 강의 시연 추가 검증
+사용자 추가 승인으로 ALB와 CloudFront/별도 비공개 S3 OAC를 실제 배포했다. ALB healthy·/health 200, CloudFront Deployed·HTTPS 200, S3 원본 403을 확인했다. 정상 DNS로 포털/Orca 연결, 공개 Orca 터미널 실행과 파일 저장·원본 복구, 로그아웃 후 활성 WebSocket 1008 종료(0.02초)를 검증했다. ALB/CloudFront 시연 자원은 오늘 13:47 종료 후 정리한다. [구성·검증·정리 범위](course-demo.md)

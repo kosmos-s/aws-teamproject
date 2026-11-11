@@ -67,3 +67,11 @@
 
 ## 팀 운영 추가 기능 (2026-11-11, 로컬)
 [팀 운영 절차](team-operations.md)에 적용 순서와 미적용 항목을 기록했다. 추가 유료 AWS 자원이나 알림 서비스를 생성하지 않았다. 로컬 구현·검증은 운영 배포/메일 발송/2FA 등록과 구분한다.
+
+## 2026-11-11 최신 배포 검증
+GitHub 기능 브랜치 091ca9c push 후 [CI 실행](https://github.com/kosmos-s/aws-teamproject/actions/runs/42955132431)이 성공했다. EC2에 같은 릴리스를 배포하고 39개 테스트를 실행했다. RDS available 이후 서비스 4개가 active, /health가 ok임을 확인했다.
+탄력적 IP를 기존 EC2에 연결했고 조회 결과의 연결 대상이 일치했다. DNS 변경 전 고정 IP로 해석을 제한하되 HTTPS 호스트 이름과 인증서 검증을 유지해 /health 200, 비인증 관리자 API 401, 인증 후 세션/프로젝트/관리자 사용자/운영 현황 200, Orca 정적 화면/Webmin 로그인 화면 200, 로그아웃 후 프로젝트 API 401을 확인했다. 이는 일반 DNS 접속이나 Orca 편집·터미널 실행 성공을 뜻하지 않는다.
+서버 타이머는 EC2 13:47:23 KST/RDS 13:46:30 KST이며, 같은 시각의 AWS 일회성 종료 예약이 enabled임을 확인했다. 이 기록 시점에 미래 종료 발생 자체는 미검증이다.
+
+## 2026-11-11 강의 시연 추가 검증
+사용자 추가 승인으로 ALB와 CloudFront/별도 비공개 S3 OAC를 실제 배포했다. ALB healthy·/health 200, CloudFront Deployed·HTTPS 200, S3 원본 403을 확인했다. 정상 DNS로 포털/Orca 연결, 공개 Orca 터미널 실행과 파일 저장·원본 복구, 로그아웃 후 활성 WebSocket 1008 종료(0.02초)를 검증했다. ALB/CloudFront 시연 자원은 오늘 13:47 종료 후 정리한다. [구성·검증·정리 범위](course-demo.md)

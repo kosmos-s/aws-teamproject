@@ -9,3 +9,9 @@
 
 ## 팀 운영 추가 기능 (2026-11-11, 로컬)
 [팀 운영 절차](team-operations.md)에 적용 순서와 미적용 항목을 기록했다. 추가 유료 AWS 자원이나 알림 서비스를 생성하지 않았다. 로컬 구현·검증은 운영 배포/메일 발송/2FA 등록과 구분한다.
+
+## 2026-11-11 후속 작업
+강의 2장 84–102쪽의 탄력적 IP 누락을 정정하고 기존 EC2에 실제 연결했다. 자체 팀 운영 코드의 GitHub push/CI와 AWS 배포를 수행했다. 강의 원본과 사설 운영 설정은 공개 저장소에 포함하지 않았다. 실제 검증과 남은 범위는 STATUS.md와 docs/verification.md를 따른다.
+
+## 2026-11-11 강의 시연 추가 검증
+사용자 추가 승인으로 ALB와 CloudFront/별도 비공개 S3 OAC를 실제 배포했다. ALB healthy·/health 200, CloudFront Deployed·HTTPS 200, S3 원본 403을 확인했다. 정상 DNS로 포털/Orca 연결, 공개 Orca 터미널 실행과 파일 저장·원본 복구, 로그아웃 후 활성 WebSocket 1008 종료(0.02초)를 검증했다. ALB/CloudFront 시연 자원은 오늘 13:47 종료 후 정리한다. [구성·검증·정리 범위](course-demo.md)
