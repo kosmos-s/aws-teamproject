@@ -20,6 +20,11 @@ class LoginSession(Base):
     expires = Column(Float, nullable=False)
 
 
+class BlockedUser(Base):
+    __tablename__ = "blocked_users"
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+
+
 class Project(Base):
     __tablename__ = "projects"
     id = Column(Integer, primary_key=True)

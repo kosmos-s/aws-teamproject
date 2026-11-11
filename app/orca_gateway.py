@@ -10,7 +10,7 @@ from fastapi import Depends, HTTPException, WebSocket
 from sqlalchemy.orm import Session
 from websockets.asyncio.client import connect
 
-from .models import LoginSession, User, OrcaProject, Event
+from .models import LoginSession, User, OrcaProject, Event, BlockedUser
 from .security import token_hash
 from datetime import datetime, timezone
 
@@ -22,7 +22,8 @@ def now():
 def live_session(engine, cookie):
     with Session(engine) as db:
         row = db.get(LoginSession, token_hash(cookie))
-        return bool(row and row.expires > time.time() and db.get(User, row.user_id))
+        user = db.get(User, row.user_id) if row else None
+        return bool(row and row.expires > time.time() and user and user.role in {"admin", "member"} and not db.get(BlockedUser, user.id))
 
 
 def obtain_pairing():
@@ -51,14 +52,19 @@ def install_orca_routes(app, settings, authenticated):
     active = {}
     active_lock = threading.Lock()
 
-    def revoke(cookie):
+    def revoke_hash(identity):
         with active_lock:
-            for event, loop in active.get(token_hash(cookie), []):
+            for event, loop in active.get(identity, []):
                 loop.call_soon_threadsafe(event.set)
+    app.state.orca_revoke_hash = revoke_hash
+    def revoke(cookie):
+        revoke_hash(token_hash(cookie))
     app.state.orca_revoke = revoke
 
     @app.get("/api/orca/authorize", status_code=204)
     def authorize(user=Depends(authenticated)):
+        if user["role"] not in {"admin", "member"}:
+            raise HTTPException(403, "Developer access required")
         return None
 
     @app.post("/api/projects/{project_id}/orca")

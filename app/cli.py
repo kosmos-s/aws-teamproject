@@ -14,7 +14,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     user = sub.add_parser("create-user")
     user.add_argument("username")
-    user.add_argument("--role", choices=["member", "admin"], default="member")
+    user.add_argument("--role", choices=["member", "admin", "viewer"], default="member")
     sub.add_parser("monitor")
     sub.add_parser("backup")
     recovery = sub.add_parser("restore")

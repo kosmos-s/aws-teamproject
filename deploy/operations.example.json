@@ -1,0 +1,12 @@
+{
+  "captured_at": "2000-01-01T00:00:00+00:00",
+  "stop_at": null,
+  "resources": [
+    {"kind": "EC2", "label": "portal-host", "state": "unknown", "cleanup": "unknown"},
+    {"kind": "RDS", "label": "portal-database", "state": "unknown", "cleanup": "unknown"},
+    {"kind": "S3", "label": "private-objects", "state": "unknown", "cleanup": "retained"}
+  ],
+  "monthly_estimate_usd": 45.32,
+  "estimate_date": "2026-11-10",
+  "backup_retention_days": 3
+}

@@ -23,7 +23,7 @@ def token_hash(token):
 
 
 def create_user(engine, username, password, role="member"):
-    if not username.strip() or len(username) > 80 or len(password) < 14 or role not in {"admin", "member"}:
+    if not username.strip() or len(username) > 80 or len(password) < 14 or role not in {"admin", "member", "viewer"}:
         raise ValueError("username, password (14+ characters), or role invalid")
     with Session(engine) as db:
         db.add(User(username=username, password_hash=password_hash(password), role=role))

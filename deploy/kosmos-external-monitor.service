@@ -1,0 +1,14 @@
+[Unit]
+Description=External KOSMOS HTTPS check (install outside EC2)
+After=network-online.target
+[Service]
+Type=oneshot
+DynamicUser=yes
+WorkingDirectory=/opt/kosmos-monitor
+EnvironmentFile=/etc/kosmos-external-monitor.env
+StateDirectory=kosmos-external-monitor
+ExecStart=/usr/bin/python3 -m app.external_monitor --state /var/lib/kosmos-external-monitor/state.json
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+UMask=0077

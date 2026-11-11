@@ -30,3 +30,6 @@
 
 ## Orca와 서버 관리 통합
 포털 프로젝트의 **Orca에서 개발환경 열기**로 공유 Orca에 연결하고, 사이드바에서 aws-teamproject를 선택한다. 관리자는 **서버 관리 → Webmin**에서 별도 계정으로 서비스·로그를 확인한다. 현재 구현·실제 검증·미검증 범위는 [연결 검증 기록](docs/orca-access-verification.md)을 따른다. 서버 GitHub 쓰기 인증과 AI 로그인은 아직 완료되지 않았다.
+
+## 팀 운영 기능 (로컬 구현)
+계정·역할·접속 회수, GitHub 자동 테스트, Git 코드 백업/복구, 외부 장애 알림과 비용·자원 현황을 추가했다. [사용·적용 절차](docs/team-operations.md)와 [Webmin 2FA 등록](docs/webmin-2fa.md)을 참고한다. 서버 재시작·배포, 원격 CI 실행, 실제 메일 발송·TOTP 등록은 아직 수행하지 않았다.

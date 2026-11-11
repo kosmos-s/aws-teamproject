@@ -1,0 +1,7 @@
+[Unit]
+Description=Check external portal once a minute
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=60s
+[Install]
+WantedBy=timers.target

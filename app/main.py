@@ -7,13 +7,14 @@ from urllib.parse import quote
 from fastapi import FastAPI, Request, HTTPException, Depends, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import create_engine, select, delete
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
 from .config import Settings
-from .models import Base, User, LoginSession, Project, Note, Attachment, Event, OrcaProject
+from .models import Base, User, LoginSession, Project, Note, Attachment, Event, OrcaProject, BlockedUser
 from .security import verify_password, token_hash, password_hash
 from .storage import Storage
 
@@ -63,6 +64,11 @@ def create_app(settings=None):
     failures = {}
     dummy_hash = password_hash("unmatched-dummy-password")
 
+    @app.exception_handler(RequestValidationError)
+    async def invalid_input(request, exc):
+        # Framework defaults echo invalid field values, including passwords.
+        return JSONResponse({"detail": "Invalid input"}, status_code=422)
+
     @app.middleware("http")
     async def guards(request, call_next):
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.headers.get("origin") != settings.origin:
@@ -89,8 +95,10 @@ def create_app(settings=None):
             if not row or row.expires <= time.time():
                 raise HTTPException(401, "Login required")
             user = db.get(User, row.user_id)
-            if not user:
+            if not user or db.get(BlockedUser, user.id):
                 raise HTTPException(401, "Login required")
+            if user.role == "viewer" and request.method not in {"GET", "HEAD"} and request.url.path != "/api/logout":
+                raise HTTPException(403, "Read-only account")
             if request.method not in {"GET", "HEAD"} and not secrets.compare_digest(request.headers.get("x-csrf-token", ""), row.csrf):
                 raise HTTPException(403, "CSRF rejected")
             return {"username": user.username, "role": user.role, "csrf": row.csrf}
@@ -104,7 +112,7 @@ def create_app(settings=None):
         with Session(engine) as db:
             user = db.scalar(select(User).where(User.username == data.username))
             valid = verify_password(data.password, user.password_hash if user else dummy_hash)
-            if not user or not valid:
+            if not user or not valid or db.get(BlockedUser, user.id):
                 failures[key] = recent + [time.time()]
                 raise HTTPException(401, "Invalid credentials")
             failures.pop(key, None)
@@ -231,4 +239,6 @@ def create_app(settings=None):
 
     from .orca_gateway import install_orca_routes
     install_orca_routes(app, settings, authenticated)
+    from .team_controls import install_team_routes
+    install_team_routes(app, settings, authenticated)
     return app

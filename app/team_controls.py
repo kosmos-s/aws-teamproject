@@ -1,0 +1,114 @@
+import json
+from datetime import datetime, timezone
+from typing import Literal
+
+from fastapi import Depends, HTTPException
+from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import select, delete
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+
+from .models import User, BlockedUser, LoginSession, Event
+from .security import create_user
+
+
+class NewUser(BaseModel):
+    username: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_.-]+$")
+    password: str = Field(min_length=14, max_length=256)
+    role: Literal["admin", "member", "viewer"] = "member"
+
+
+class AccessChange(BaseModel):
+    active: bool
+    role: Literal["admin", "member", "viewer"]
+
+
+class ResourceState(BaseModel):
+    kind: str = Field(max_length=40)
+    label: str = Field(max_length=120)
+    state: str = Field(max_length=40)
+    cleanup: Literal["unknown", "pending", "retained", "deleted"] = "unknown"
+
+
+class OperationsSnapshot(BaseModel):
+    captured_at: datetime
+    stop_at: datetime | None = None
+    resources: list[ResourceState] = Field(max_length=30)
+    monthly_estimate_usd: float = Field(ge=0, le=10000)
+    estimate_date: str = Field(max_length=30)
+    backup_retention_days: int = Field(ge=1, le=365)
+
+
+def read_operations(path):
+    if not path.exists():
+        return {"state": "unknown", "detail": "No operator snapshot; no live AWS check performed"}
+    try:
+        if path.stat().st_size > 32768:
+            raise ValueError("snapshot too large")
+        data = OperationsSnapshot.model_validate_json(path.read_text(encoding="utf-8"))
+        if data.captured_at.tzinfo is None or (data.stop_at and data.stop_at.tzinfo is None):
+            raise ValueError("UTC offset required")
+        age = (datetime.now(timezone.utc) - data.captured_at).total_seconds()
+        if age < -60:
+            raise ValueError("future snapshot")
+        return {"state": "stale" if age > 3600 else "current", "source": "operator snapshot", "billing": "estimate, not actual charges", **data.model_dump(mode="json")}
+    except (ValueError, OSError, ValidationError):
+        return {"state": "unknown", "detail": "Invalid operator snapshot; no live AWS check performed"}
+
+
+def install_team_routes(app, settings, authenticated):
+    engine = app.state.engine
+
+    def admin(user=Depends(authenticated)):
+        if user["role"] != "admin":
+            raise HTTPException(403, "Administrator required")
+        return user
+
+    def audit(db, actor, summary):
+        db.add(Event(kind="account-access", state="ok", created=datetime.now(timezone.utc).isoformat(), summary=f"{actor}: {summary}"))
+
+    @app.get("/api/admin/users")
+    def users(actor=Depends(admin)):
+        with Session(engine) as db:
+            blocked = set(db.scalars(select(BlockedUser.user_id)))
+            return [{"id": u.id, "username": u.username, "role": u.role, "active": u.id not in blocked} for u in db.scalars(select(User).order_by(User.id))]
+
+    @app.post("/api/admin/users", status_code=201)
+    def add_user(data: NewUser, actor=Depends(admin)):
+        try:
+            create_user(engine, data.username, data.password, data.role)
+        except IntegrityError:
+            raise HTTPException(409, "Username already exists")
+        with Session(engine) as db:
+            audit(db, actor["username"], f"created {data.username} role={data.role}")
+            db.commit()
+        return {"username": data.username, "role": data.role, "active": True}
+
+    @app.patch("/api/admin/users/{user_id}")
+    def update_access(user_id: int, data: AccessChange, actor=Depends(admin)):
+        with Session(engine) as db:
+            # Serialize administrator changes to prevent simultaneous last-admin removal.
+            all_users = list(db.scalars(select(User).order_by(User.id).with_for_update()))
+            target = next((u for u in all_users if u.id == user_id), None)
+            if not target:
+                raise HTTPException(404, "User not found")
+            blocked = set(db.scalars(select(BlockedUser.user_id)))
+            removing_admin = target.role == "admin" and (not data.active or data.role != "admin")
+            if (target.username == actor["username"] and (not data.active or data.role != "admin")) or (removing_admin and sum(u.role == "admin" and u.id not in blocked for u in all_users) <= 1):
+                raise HTTPException(409, "Cannot lock current or last administrator")
+            target.role = data.role
+            if data.active:
+                db.execute(delete(BlockedUser).where(BlockedUser.user_id == user_id))
+            elif user_id not in blocked:
+                db.add(BlockedUser(user_id=user_id))
+            tokens = list(db.scalars(select(LoginSession.token_hash).where(LoginSession.user_id == user_id)))
+            db.execute(delete(LoginSession).where(LoginSession.user_id == user_id))
+            audit(db, actor["username"], f"access {target.username} active={data.active} role={data.role}; sessions revoked")
+            db.commit()
+        for token in tokens:
+            app.state.orca_revoke_hash(token)
+        return {"ok": True, "sessions_revoked": len(tokens)}
+
+    @app.get("/api/admin/operations")
+    def operations(actor=Depends(admin)):
+        return read_operations(settings.data_dir / "operations.json")

@@ -50,3 +50,7 @@ RDS 자동 백업 보존은 1일이다. 무료 백업 저장 허용량을 무제
 크레딧/사용량 반영은 실시간이 아니므로 설치 직후 차감액을 확정하지 않는다. 다른 리전의 EBS·ELB·RDS 등 전체 자원 비용 감사는 아직 수행하지 않았다.
 
 공식 참고: [Free Tier 플랜 API](https://docs.aws.amazon.com/cli/latest/reference/freetier/get-account-plan-state.html), [EC2 Free Tier](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-free-tier-usage.html), [EC2 정지/시작](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Stop_Start.html).
+
+
+## 팀 운영 추가 기능 (2026-11-11, 로컬)
+[팀 운영 절차](team-operations.md)에 적용 순서와 미적용 항목을 기록했다. 추가 유료 AWS 자원이나 알림 서비스를 생성하지 않았다. 로컬 구현·검증은 운영 배포/메일 발송/2FA 등록과 구분한다.

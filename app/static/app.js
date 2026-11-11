@@ -1,5 +1,6 @@
 'use strict';
 let csrf = '';
+let currentUser = null;
 const $ = id => document.getElementById(id);
 const message = text => { $('message').textContent = text; };
 async function api(path, options = {}) {
@@ -15,7 +16,12 @@ async function api(path, options = {}) {
   }
   return response.json();
 }
-function showLogin() { $('login').hidden = false; $('dashboard').hidden = true; csrf = ''; }
+function applySession(session) {
+  currentUser = session; csrf = session.csrf; $('identity').textContent = session.username;
+  for (const id of ['admin-tools','account-tools','operations-tools']) $(id).hidden = session.role !== 'admin';
+  for (const id of ['project-form','note-form','upload-form']) $(id).hidden = session.role === 'viewer';
+}
+function showLogin() { currentUser = null; $('login').hidden = false; $('dashboard').hidden = true; csrf = ''; }
 function record(title, body, meta) {
   const node = document.createElement('article'); node.className = 'record';
   for (const [tag, text] of [['strong', title], ['p', body], ['small', meta]]) {
@@ -45,7 +51,7 @@ async function refresh() {
   }
   for (const p of projects) {
     const node = record(p.name, p.description, new Date(p.created).toLocaleString());
-    if (p.orca_available) {
+    if (p.orca_available && currentUser?.role !== 'viewer') {
       const button = document.createElement('button'); button.textContent = 'Orca에서 개발환경 열기';
       button.addEventListener('click', async () => {
         const tab = window.open('about:blank', '_blank');
@@ -67,6 +73,7 @@ async function refresh() {
   for (const e of events) $('events').append(record(`${e.kind} · ${e.state}`, e.summary, new Date(e.created).toLocaleString()));
   if (!events.length) $('events').append(record('기록 없음', '정기 점검이 실행되면 이곳에 표시됩니다.', ''));
   await files();
+  if (currentUser?.role === 'admin') await refreshAdmin();
 }
 function form(id, handler) {
   $(id).addEventListener('submit', async event => {
@@ -76,7 +83,7 @@ function form(id, handler) {
 }
 form('login-form', async data => {
   const result = await api('/api/login', {method:'POST', body:Object.fromEntries(data)}); csrf = result.csrf;
-  const session = await api('/api/session'); $('admin-tools').hidden = session.role !== 'admin'; $('identity').textContent = session.username;
+  const session = await api('/api/session'); applySession(session);
   $('login-form').reset(); $('login').hidden = true; $('dashboard').hidden = false; await refresh();
 });
 form('project-form', async data => { await api('/api/projects', {method:'POST',body:Object.fromEntries(data)}); $('project-form').reset(); await refresh(); });
@@ -84,5 +91,5 @@ form('note-form', async data => { await api(`/api/projects/${data.get('project_i
 form('upload-form', async data => { const id = data.get('project_id'); data.delete('project_id'); await api(`/api/projects/${id}/attachments`, {method:'POST',body:data}); $('upload-form').elements.file.value = ''; await files(); });
 $('upload-project').addEventListener('change', () => files().catch(error => message(error.message)));
 $('logout').addEventListener('click', async () => { try { await api('/api/logout',{method:'POST'}); showLogin(); } catch(error) { message(error.message); } });
-api('/api/session').then(async session => { csrf = session.csrf; $('identity').textContent = session.username; $('admin-tools').hidden = session.role !== 'admin'; $('login').hidden = true; $('dashboard').hidden = false; await refresh(); }).catch(() => showLogin());
+api('/api/session').then(async session => { applySession(session); $('login').hidden = true; $('dashboard').hidden = false; await refresh(); }).catch(() => showLogin());
 setInterval(() => { if (!$('dashboard').hidden) refresh().catch(error => message(error.message)); }, 60000);
