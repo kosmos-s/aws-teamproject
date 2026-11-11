@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from .models import User, BlockedUser, LoginSession, Event
+from .collab import forget_user_chat
 from .security import create_user, password_hash, verify_password, token_hash
 
 
@@ -80,7 +82,11 @@ def install_team_routes(app, settings, authenticated):
     def users(actor=Depends(admin)):
         with Session(engine) as db:
             blocked = set(db.scalars(select(BlockedUser.user_id)))
-            return [{"id": u.id, "username": u.username, "role": u.role, "active": u.id not in blocked} for u in db.scalars(select(User).order_by(User.id))]
+            live = {}
+            for uid in db.scalars(select(LoginSession.user_id).where(LoginSession.expires > time.time())):
+                live[uid] = live.get(uid, 0) + 1
+            return [{"id": u.id, "username": u.username, "role": u.role, "active": u.id not in blocked,
+                     "sessions": live.get(u.id, 0)} for u in db.scalars(select(User).order_by(User.id))]
 
     @app.post("/api/admin/users", status_code=201)
     def add_user(data: NewUser, actor=Depends(admin)):
@@ -156,6 +162,7 @@ def install_team_routes(app, settings, authenticated):
                 raise HTTPException(409, "Cannot delete last administrator")
             tokens = revoke_sessions(db, user_id)
             db.execute(delete(BlockedUser).where(BlockedUser.user_id == user_id))
+            forget_user_chat(db, user_id)
             name = target.username
             db.delete(target)
             audit(db, actor["username"], f"deleted {name}; sessions revoked")

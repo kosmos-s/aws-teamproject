@@ -97,7 +97,7 @@ def create_app(settings=None):
             user = db.get(User, row.user_id)
             if not user or db.get(BlockedUser, user.id):
                 raise HTTPException(401, "Login required")
-            if user.role == "viewer" and request.method not in {"GET", "HEAD"} and request.url.path not in {"/api/logout", "/api/account/password"}:
+            if user.role == "viewer" and request.method not in {"GET", "HEAD"} and request.url.path not in {"/api/logout", "/api/account/password"} and not request.url.path.startswith("/api/chat/"):
                 raise HTTPException(403, "Read-only account")
             if request.method not in {"GET", "HEAD"} and not secrets.compare_digest(request.headers.get("x-csrf-token", ""), row.csrf):
                 raise HTTPException(403, "CSRF rejected")
@@ -239,6 +239,8 @@ def create_app(settings=None):
 
     from .orca_gateway import install_orca_routes
     install_orca_routes(app, settings, authenticated)
+    from .collab import install_collab_routes
+    install_collab_routes(app, authenticated)
     from .team_controls import install_team_routes
     install_team_routes(app, settings, authenticated)
     return app

@@ -51,7 +51,7 @@ function applySession(session) {
   for (const id of ['admin-tools','account-tools','operations-tools']) $(id).hidden = session.role !== 'admin';
   for (const id of ['project-form','note-form','upload-form']) $(id).hidden = session.role === 'viewer';
 }
-function showLogin() { currentUser = null; $('login').hidden = false; $('dashboard').hidden = true; csrf = ''; }
+function showLogin() { currentUser = null; $('login').hidden = false; $('dashboard').hidden = true; csrf = ''; live.last = null; if (typeof chatReset === 'function') chatReset(); }
 function record(title, body, meta) {
   const node = document.createElement('article'); node.className = 'record';
   for (const [tag, text] of [['strong', title], ['p', body], ['small', meta]]) {
@@ -126,7 +126,7 @@ function form(id, handler) {
 form('login-form', async data => {
   const result = await api('/api/login', {method:'POST', body:Object.fromEntries(data)}); csrf = result.csrf;
   const session = await api('/api/session'); applySession(session);
-  $('login-form').reset(); $('login').hidden = true; $('dashboard').hidden = false; await refresh();
+  $('login-form').reset(); $('login').hidden = true; $('dashboard').hidden = false; await refresh(); await chatStart();
 });
 form('password-form', async data => {
   const result = await api('/api/account/password', {method:'POST', body:{current:data.get('current'), new:data.get('new')}});
@@ -149,5 +149,30 @@ $('events-toggle').addEventListener('click', () => {
   updateEventsView();
 });
 $('logout').addEventListener('click', async () => { try { await api('/api/logout',{method:'POST'}); showLogin(); } catch(error) { message(error.message); } });
-api('/api/session').then(async session => { applySession(session); $('login').hidden = true; $('dashboard').hidden = false; await refresh(); }).catch(() => showLogin());
-setInterval(() => { if (!$('dashboard').hidden) refresh().catch(error => message(error.message)); }, 60000);
+api('/api/session').then(async session => { applySession(session); $('login').hidden = true; $('dashboard').hidden = false; await refresh(); await chatStart(); }).catch(() => showLogin());
+// Live updates: poll a cheap fingerprint and redraw only the parts that changed.
+// 3s while the tab is visible, 15s in the background; a full refresh still runs every 60s.
+const live = { last: null, timer: null, failures: 0, lastFull: 0 };
+async function livePoll() {
+  if ($('dashboard').hidden) return;
+  try {
+    const now = await api('/api/changes');
+    const prev = live.last; live.last = now; live.failures = 0;
+    if (prev) {
+      if (now.board !== prev.board || now.events !== prev.events || Date.now() - live.lastFull > 60000) { live.lastFull = Date.now(); await refresh(); }
+      else if (now.users !== prev.users && currentUser?.role === 'admin') await refreshAdmin();
+      if (now.chat !== prev.chat) await chatTick();
+    } else live.lastFull = Date.now();
+    if ($('message').dataset.offline) { message(''); delete $('message').dataset.offline; }
+  } catch (error) {
+    live.failures += 1;
+    if (live.failures === 2) { message(error.message); $('message').dataset.offline = '1'; }
+  }
+}
+function liveSchedule() {
+  clearTimeout(live.timer);
+  const delay = document.hidden ? 15000 : Math.min(3000 * Math.max(1, live.failures), 30000);
+  live.timer = setTimeout(async () => { await livePoll(); liveSchedule(); }, delay);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) livePoll().finally(liveSchedule); });
+liveSchedule();

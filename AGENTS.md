@@ -4,7 +4,7 @@
 - 주제: **AWS 기반 팀 공유 AI 개발환경 구축 및 운영**. 대학 3인 팀 과제이며, 사용자가 운영하는 EC2는 한 대만 둔다.
 - 기존 도구 Orca를 원격 개발환경으로 활용한다. 자체 개발 범위는 운영 포털/API/DB, 상태 점검, 백업·복원, 배포 설정과 검증 기록이다.
 - 저장소: https://github.com/kosmos-s/aws-teamproject. 현재 작업 경로가 이 저장소 또는 Orca가 만든 worktree인지 확인한다.
-- 새 웹 IDE, CRDT 공동 편집기, 팀 채팅, 자체 에이전트 엔진, 사용자별 컨테이너를 추가하지 않는다.
+- 새 웹 IDE, CRDT 공동 편집기, 자체 에이전트 엔진, 사용자별 컨테이너를 추가하지 않는다. 팀 채팅(전체방·1:1)은 2026-11-11 사용자 요청으로 포털에 추가했다(폴링 방식, 별도 서버 없음).
 
 ## 작업 시작
 1. README.md → STATUS.md → docs/course-review.md → docs/architecture.md → docs/deployment.md를 읽는다.

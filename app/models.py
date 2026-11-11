@@ -66,3 +66,23 @@ class Event(Base):
     state = Column(String(20), nullable=False)
     created = Column(String(40), nullable=False)
     summary = Column(Text, nullable=False)
+
+
+class ChatMessage(Base):
+    """Team chat. room='main' (everyone) or 'dm' (sender ↔ recipient)."""
+    __tablename__ = "chat_messages"
+    id = Column(Integer, primary_key=True)
+    room = Column(String(10), nullable=False, index=True)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    sender_name = Column(String(80), nullable=False)
+    recipient_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    body = Column(Text, nullable=False)
+    created = Column(String(40), nullable=False)
+
+
+class ChatRead(Base):
+    """Last message each user has read per room ('main' or 'dm:<peer id>')."""
+    __tablename__ = "chat_reads"
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    room_key = Column(String(40), primary_key=True)
+    last_id = Column(Integer, nullable=False, default=0)
