@@ -57,7 +57,9 @@ RDS 자동 백업 보존은 1일이다. 무료 백업 저장 허용량을 무제
 
 ## 2026-11-11 고정 IP와 제한 운영
 사용자 요청으로 EIP 1개를 기존 EC2에 연결했다. 공인 IPv4 단가는 $0.005/시간으로 기존 실행 중 IP와 같으며 중복 IPv4를 계속 보유하지 않는다. EIP는 EC2 중지 후에도 보유 비용이 남는다(30일 $3.60, 730시간 $3.65). 기존 상시 가동 월 견적 $45.32에는 IPv4 1개가 이미 포함돼 있어 EIP 비용을 중복 가산하지 않는다. 중지 후에는 EBS/RDS 저장/S3와 EIP 비용이 남는다.
-현재 승인된 재가동은 오늘 13:47:23 KST까지다. ALB/CloudFront/Route 53 유료 자원은 아직 추가하지 않았다. [VPC 공식 가격](https://aws.amazon.com/vpc/pricing/).
+현재 승인된 재가동은 오늘 13:47:23 KST까지다. 이후 추가 승인한 ALB/CloudFront는 같은 종료 시각까지 시연 후 정리한다. Route 53 유료 호스팅 영역은 생성하지 않았다. [VPC 공식 가격](https://aws.amazon.com/vpc/pricing/).
 
 ## 2026-11-11 강의 시연 추가 검증
 사용자 추가 승인으로 ALB와 CloudFront/별도 비공개 S3 OAC를 실제 배포했다. ALB healthy·/health 200, CloudFront Deployed·HTTPS 200, S3 원본 403을 확인했다. 정상 DNS로 포털/Orca 연결, 공개 Orca 터미널 실행과 파일 저장·원본 복구, 로그아웃 후 활성 WebSocket 1008 종료(0.02초)를 검증했다. ALB/CloudFront 시연 자원은 오늘 13:47 종료 후 정리한다. [구성·검증·정리 범위](course-demo.md)
+
+ALB 시연은 약 $0.0225/시간 + 공인 IPv4 2개 약 $0.01/시간 + LCU 사용량이며 부분 시간 과금 기준은 실제 청구에 따른다. 앞서 안내한 30분 $0.02는 시간 비례 추정으로 최종 청구 보장이 아니다. CloudFront/S3 요청·저장·전송 비용은 별도다. 정리 시 CloudFront disable 전파 대기가 남을 수 있으며 삭제 완료를 확인한 뒤 기록한다.

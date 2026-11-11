@@ -75,3 +75,5 @@ GitHub 기능 브랜치 091ca9c push 후 [CI 실행](https://github.com/kosmos-s
 
 ## 2026-11-11 강의 시연 추가 검증
 사용자 추가 승인으로 ALB와 CloudFront/별도 비공개 S3 OAC를 실제 배포했다. ALB healthy·/health 200, CloudFront Deployed·HTTPS 200, S3 원본 403을 확인했다. 정상 DNS로 포털/Orca 연결, 공개 Orca 터미널 실행과 파일 저장·원본 복구, 로그아웃 후 활성 WebSocket 1008 종료(0.02초)를 검증했다. ALB/CloudFront 시연 자원은 오늘 13:47 종료 후 정리한다. [구성·검증·정리 범위](course-demo.md)
+
+EC2에서 새 코드 백업 명령으로 Git HEAD를 백업하고 별도의 빈 /var/tmp 복원 대상으로 복구했다. 복원 README가 원본 커밋 blob과 바이트 단위로 같고 운영 README의 기존 미커밋 변경이 유지됨을 확인했다. 이 검증은 코드 파일 복원이며 서버 전체 복구나 AI 작업 재개를 의미하지 않는다.

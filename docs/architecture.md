@@ -1,3 +1,7 @@
+# 현재 구성 안내
+
+2026-11-11 현재 공개 HTTPS Orca·Webmin, 고정 EIP, RDS/S3와 한시 ALB·CloudFront 시연은 [최신 실제 구성도](course-demo.md)를 따른다. 아래는 초기 단계에서 최신 포털로 확장한 기록이다.
+
 # 초기 Orca 배포 구조 (아래 최신 포털 구성 참고)
 
 ```mermaid
