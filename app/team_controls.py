@@ -75,6 +75,9 @@ def install_team_routes(app, settings, authenticated):
             raise HTTPException(403, "Administrator required")
         return user
 
+    from .orca_admin import install_orca_admin_routes
+    install_orca_admin_routes(app, admin)
+
     def audit(db, actor, summary):
         db.add(Event(kind="account-access", state="ok", created=datetime.now(timezone.utc).isoformat(), summary=f"{actor}: {summary}"))
 

@@ -86,3 +86,18 @@ class ChatRead(Base):
     user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
     room_key = Column(String(40), primary_key=True)
     last_id = Column(Integer, nullable=False, default=0)
+
+
+class OrcaLinkRequest(Base):
+    """Admin request to clone a GitHub repo into Orca and link it to a portal project.
+    The web only records the request; a fixed root timer job (deploy/orca-link-worker.py) runs it."""
+    __tablename__ = "orca_link_requests"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    repository_url = Column(String(255), nullable=False)
+    folder = Column(String(100), nullable=False)
+    state = Column(String(20), nullable=False, index=True)
+    detail = Column(String(500), nullable=False, default="")
+    requested_by = Column(String(80), nullable=False)
+    created = Column(String(40), nullable=False)
+    finished = Column(String(40), nullable=True)

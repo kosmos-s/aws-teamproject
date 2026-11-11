@@ -48,7 +48,7 @@ const ERRORS = {
 const STATUS_ERRORS = {400:'요청이 올바르지 않습니다.',403:'권한이 없습니다.',404:'대상을 찾을 수 없습니다.',409:'현재 상태에서는 할 수 없는 작업입니다.',413:'요청이 너무 큽니다.',422:'입력값을 확인하세요.',429:'요청이 너무 많습니다. 잠시 후 다시 시도하세요.',500:'서버 내부 오류가 발생했습니다.',502:'서버가 응답하지 않습니다. 운영 시간인지 확인하세요.',503:'서버를 잠시 사용할 수 없습니다.',504:'서버 응답 시간이 초과되었습니다.'};
 function applySession(session) {
   currentUser = session; csrf = session.csrf; $('identity').textContent = session.username;
-  for (const id of ['admin-tools','account-tools','operations-tools']) $(id).hidden = session.role !== 'admin';
+  for (const id of ['admin-tools','account-tools','operations-tools','orca-tools']) $(id).hidden = session.role !== 'admin';
   for (const id of ['project-form','note-form','upload-form']) $(id).hidden = session.role === 'viewer';
 }
 function showLogin() { currentUser = null; $('login').hidden = false; $('dashboard').hidden = true; csrf = ''; live.last = null; if (typeof chatReset === 'function') chatReset(); }
