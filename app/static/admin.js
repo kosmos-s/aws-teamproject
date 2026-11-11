@@ -50,7 +50,7 @@ function memberRow(user) {
 
   if (user.username === currentUser.username) {
     role.disabled = active.disabled = apply.disabled = true;
-    const note = document.createElement('small'); note.className = 'self-note'; note.textContent = '자기 계정은 위 \'내 비밀번호 변경\'에서 관리합니다.'; row.append(note);
+    const note = document.createElement('small'); note.className = 'self-note'; note.textContent = '자기 계정은 \'내 계정\' 메뉴에서 관리합니다.'; row.append(note);
     return row;
   }
   apply.addEventListener('click', async () => {

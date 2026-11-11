@@ -47,3 +47,4 @@ button.link{background:none;color:#91b5ff;padding:0;font-weight:600}button.link:
 button.room.group-room small{color:#9fb6e6}
 @media(max-width:900px){.app{grid-template-columns:1fr}.sidebar{position:static;flex-direction:row;overflow-x:auto;padding:8px}.nav-label{display:none}.nav-item{white-space:nowrap}.grid.two,.inline-form{grid-template-columns:1fr}}
 .guide ol,.guide ul{margin:6px 0 10px;padding-left:20px;line-height:1.8;color:#c9d4ea;font-size:14px}.guide code{background:#1d2a4a;border-radius:5px;padding:1px 6px;font-size:12.5px}
+.member-row .who small{display:block}

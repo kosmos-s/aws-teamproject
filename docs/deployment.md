@@ -79,3 +79,8 @@ Nginx 설정은 deploy/portal-nginx.conf의 도메인을 대체해 사용하고 
 
 ## 이력 UI 갱신
 app/templates/index.html, app/static/app.js, app/static/style.css만 체크섬 검증 후 교체했다. 교체 전 서버의 해당 파일을 별도 보존했다. 템플릿과 정적 파일은 요청 시 읽으므로 서버 서비스 재시작 없이 반영했다. CSS/JS URL에 변경 버전을 붙여 기존 캐시가 남지 않도록 했다. 기존 운영 종료 예약과 DB는 변경하지 않았다.
+
+
+## 2026-11-11 오후 배포 방식 (핫 배포)
+변경된 파일만 묶어 SSM으로 보낸다. 서버의 기존 파일이 마지막 배포 커밋과 같은지 해시로 먼저 확인하고(다르면 중단), 백업 후 교체 → `python -c "import app.main"` → `systemctl restart kosmos-portal` → `/health` 확인. 실패하면 백업으로 자동 복구한다. 새 테이블은 포털 시작 시 `create_all`로 생기며 기존 테이블은 `ALTER` 하지 않는다.
+관리자 Orca 연결은 `deploy/kosmos-orca-link.service/.timer`(20초)가 `deploy/orca-link-worker.py`를 root로 실행해 처리한다. 웹은 요청만 기록한다.
