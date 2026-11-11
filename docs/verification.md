@@ -77,3 +77,11 @@ GitHub 기능 브랜치 091ca9c push 후 [CI 실행](https://github.com/kosmos-s
 사용자 추가 승인으로 ALB와 CloudFront/별도 비공개 S3 OAC를 실제 배포했다. ALB healthy·/health 200, CloudFront Deployed·HTTPS 200, S3 원본 403을 확인했다. 정상 DNS로 포털/Orca 연결, 공개 Orca 터미널 실행과 파일 저장·원본 복구, 로그아웃 후 활성 WebSocket 1008 종료(0.02초)를 검증했다. ALB/CloudFront 시연 자원은 오늘 13:47 종료 후 정리한다. [구성·검증·정리 범위](course-demo.md)
 
 EC2에서 새 코드 백업 명령으로 Git HEAD를 백업하고 별도의 빈 /var/tmp 복원 대상으로 복구했다. 복원 README가 원본 커밋 blob과 바이트 단위로 같고 운영 README의 기존 미커밋 변경이 유지됨을 확인했다. 이 검증은 코드 파일 복원이며 서버 전체 복구나 AI 작업 재개를 의미하지 않는다.
+
+## 최종 확인 — 2026-11-11 13:51 KST
+- 승인된 종료 시각에 EC2 stopped 확인, RDS도 stopped 확인. 운영 시간을 연장하지 않았다. 현재 공개 포털/Orca/Webmin은 중지 상태다.
+- EC2 중지 후에도 EIP 연결과 동일 주소가 유지됨을 AWS에서 확인했다. 중지 후 재시작 시험까지 추가 수행하지는 않았다.
+- 시연 ALB, target group, 전용 SG, CloudFront distribution, OAC, 별도 정적 S3 버킷은 각각 명시적인 NotFound/404 응답으로 삭제 확인했다. 기존 RDS/EBS/첨부·백업 S3/EIP는 보존했다.
+- 일회성 Scheduler 예약은 실행 후 모두 사라졌고, 이번에 만든 두 임시 Scheduler IAM 역할과 인라인 정책도 제거했다.
+- RDS 자동 재시작 예정은 2026-11-18 13:50:51 KST로 조회됐다. 중지 상태에서도 저장 비용이 남으며, 재시작 이후에는 컴퓨팅 비용이 다시 발생한다. 최종 삭제나 운영 연장은 별도 결정이 필요하다.
+- EIP는 중지 중에도 $0.005/시간(30일 약 $3.60)이 남는다. EBS/RDS 저장·기존 S3도 별도다. 최종 청구액이나 크레딧 잔액은 실시간 추정과 구분한다.
