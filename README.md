@@ -44,3 +44,10 @@
 
 ## 발표·제출 준비
 발표자: 김건보·강태영·박찬욱. 팀명 없음. [발표 대본과 근거](docs/presentation-script.md), [3인 최종 시연 절차](docs/final-rehearsal.md), [제출 점검표](docs/submission-checklist.md)를 참고한다. 개인별 기여는 실제 기록으로 작성한다.
+
+- [프로그램 구성과 사용 순서](docs/user-guide.md)
+- [과제 공지 평가표 대비 점검](docs/assignment-audit.md)
+
+점검·백업 이력은 대시보드 맨 아래에 있으며 기본 최근 3개, 펼치면 조회된 최근 최대 100개를 볼 수 있다.
+
+발표 자료는 과제 공지 기준 23장·20분 계획으로 다시 작성했다. 최신 [발표 대본](docs/presentation-script.md)과 [공지 대비 검토](docs/assignment-audit.md)를 따른다. 담당 업무·개인별 기여·발표 구간은 사용자 확인 결과 미정이다.

@@ -3,8 +3,10 @@
 ```mermaid
 erDiagram
     users ||--o{ sessions : authenticates
+    users ||--o| blocked_users : may_be_blocked
     projects ||--o{ work_notes : contains
     projects ||--o{ attachments : contains
+    projects ||--o| orca_projects : may_link_runtime
     users {
         int id PK
         string username UK
@@ -16,6 +18,9 @@ erDiagram
         int user_id FK
         string csrf
         float expires
+    }
+    blocked_users {
+        int user_id PK, FK
     }
     projects {
         int id PK
@@ -30,11 +35,17 @@ erDiagram
         text body
         string created
     }
+    orca_projects {
+        int project_id PK, FK
+        string label
+        string repository_url
+    }
     attachments {
         int id PK
         int project_id FK
         string name
         string key
+        string media_type
         int size
     }
     operation_events {

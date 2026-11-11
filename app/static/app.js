@@ -29,6 +29,15 @@ function record(title, body, meta) {
   }
   return node;
 }
+function updateEventsView() {
+  const button = $('events-toggle');
+  const expanded = button.getAttribute('aria-expanded') === 'true';
+  const count = Number($('events').dataset.count || 0);
+  $('event-history').classList.toggle('expanded', expanded);
+  $('events').tabIndex = expanded ? 0 : -1;
+  button.hidden = count === 0;
+  button.textContent = expanded ? '이력 접기' : `이력 펼치기 (${count}개)`;
+}
 async function files() {
   const id = $('upload-project').value; $('files').replaceChildren();
   if (!id) return;
@@ -72,6 +81,9 @@ async function refresh() {
   for (const n of notes) $('notes').append(record(projects.find(p => p.id === n.project_id)?.name || '프로젝트', n.body, `${n.author} · ${new Date(n.created).toLocaleString()}`));
   for (const e of events) $('events').append(record(`${e.kind} · ${e.state}`, e.summary, new Date(e.created).toLocaleString()));
   if (!events.length) $('events').append(record('기록 없음', '정기 점검이 실행되면 이곳에 표시됩니다.', ''));
+  $('events').dataset.count = String(events.length);
+  $('events-count').textContent = events.length ? `조회된 최근 ${events.length}개 · 기본 화면에는 3개만 표시합니다.` : '아직 기록이 없습니다.';
+  updateEventsView();
   await files();
   if (currentUser?.role === 'admin') await refreshAdmin();
 }
@@ -90,6 +102,11 @@ form('project-form', async data => { await api('/api/projects', {method:'POST',b
 form('note-form', async data => { await api(`/api/projects/${data.get('project_id')}/notes`, {method:'POST',body:{body:data.get('body')}}); $('note-form').elements.body.value = ''; await refresh(); });
 form('upload-form', async data => { const id = data.get('project_id'); data.delete('project_id'); await api(`/api/projects/${id}/attachments`, {method:'POST',body:data}); $('upload-form').elements.file.value = ''; await files(); });
 $('upload-project').addEventListener('change', () => files().catch(error => message(error.message)));
+$('events-toggle').addEventListener('click', () => {
+  const button = $('events-toggle');
+  button.setAttribute('aria-expanded', String(button.getAttribute('aria-expanded') !== 'true'));
+  updateEventsView();
+});
 $('logout').addEventListener('click', async () => { try { await api('/api/logout',{method:'POST'}); showLogin(); } catch(error) { message(error.message); } });
 api('/api/session').then(async session => { applySession(session); $('login').hidden = true; $('dashboard').hidden = false; await refresh(); }).catch(() => showLogin());
 setInterval(() => { if (!$('dashboard').hidden) refresh().catch(error => message(error.message)); }, 60000);
