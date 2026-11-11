@@ -1,6 +1,6 @@
 # AWS Team Project — KOSMOS Cloud
 
-**현재 운영 상태: 2026-11-11 승인된 시연 종료 후 EC2·RDS는 중지됐습니다. 고정 EIP와 기존 데이터는 보존했고, 한시 ALB·CloudFront·정적 S3 시연 자원은 삭제 확인했습니다.**
+**운영 기록 갱신: 2026-11-11 추가 승인으로 EC2·RDS를 재기동했습니다. 이번 EC2 종료는 15:02:07 KST, RDS 중지 요청은 15:01:14 KST입니다. 이 시각 이후의 실시간 상태를 이 문서만으로 판단하지 마세요. 한시 ALB·CloudFront·정적 S3 시연 자원은 삭제 상태를 유지합니다.**
 
 대학 과제용 AWS EC2 한 대에 Orca를 실제 배포하는 프로젝트.
 
@@ -41,3 +41,6 @@
 
 ## 2026-11-11 강의 시연 추가 검증
 사용자 추가 승인으로 ALB와 CloudFront/별도 비공개 S3 OAC를 실제 배포했다. ALB healthy·/health 200, CloudFront Deployed·HTTPS 200, S3 원본 403을 확인했다. 정상 DNS로 포털/Orca 연결, 공개 Orca 터미널 실행과 파일 저장·원본 복구, 로그아웃 후 활성 WebSocket 1008 종료(0.02초)를 검증했다. ALB/CloudFront 시연 자원은 오늘 13:47 종료 후 정리한다. [구성·검증·정리 범위](docs/course-demo.md)
+
+## 발표·제출 준비
+발표자: 김건보·강태영·박찬욱. 팀명 없음. [발표 대본과 근거](docs/presentation-script.md), [3인 최종 시연 절차](docs/final-rehearsal.md), [제출 점검표](docs/submission-checklist.md)를 참고한다. 개인별 기여는 실제 기록으로 작성한다.
