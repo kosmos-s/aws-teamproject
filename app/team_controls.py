@@ -2,19 +2,28 @@ import json
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select, delete
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from .models import User, BlockedUser, LoginSession, Event
-from .security import create_user
+from .security import create_user, password_hash, verify_password, token_hash
+
+
+class PasswordReset(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+
+
+class PasswordChange(BaseModel):
+    current: str = Field(max_length=256)
+    new: str = Field(min_length=1, max_length=256)
 
 
 class NewUser(BaseModel):
     username: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_.-]+$")
-    password: str = Field(min_length=14, max_length=256)
+    password: str = Field(min_length=1, max_length=256)
     role: Literal["admin", "member", "viewer"] = "member"
 
 
@@ -108,6 +117,70 @@ def install_team_routes(app, settings, authenticated):
         for token in tokens:
             app.state.orca_revoke_hash(token)
         return {"ok": True, "sessions_revoked": len(tokens)}
+
+    def revoke_sessions(db, user_id, keep=None):
+        query = select(LoginSession.token_hash).where(LoginSession.user_id == user_id)
+        tokens = [t for t in db.scalars(query) if t != keep]
+        if tokens:
+            db.execute(delete(LoginSession).where(LoginSession.token_hash.in_(tokens)))
+        return tokens
+
+    @app.put("/api/admin/users/{user_id}/password")
+    def reset_password(user_id: int, data: PasswordReset, actor=Depends(admin)):
+        with Session(engine) as db:
+            target = db.get(User, user_id)
+            if not target:
+                raise HTTPException(404, "User not found")
+            if target.username == actor["username"]:
+                raise HTTPException(409, "Use your own password change")
+            target.password_hash = password_hash(data.password)
+            tokens = revoke_sessions(db, user_id)
+            audit(db, actor["username"], f"password reset {target.username}; sessions revoked")
+            db.commit()
+        for token in tokens:
+            app.state.orca_revoke_hash(token)
+        return {"ok": True, "sessions_revoked": len(tokens)}
+
+    @app.delete("/api/admin/users/{user_id}")
+    def delete_user(user_id: int, actor=Depends(admin)):
+        with Session(engine) as db:
+            # Same lock as update_access so two admins cannot remove the last admin together.
+            all_users = list(db.scalars(select(User).order_by(User.id).with_for_update()))
+            target = next((u for u in all_users if u.id == user_id), None)
+            if not target:
+                raise HTTPException(404, "User not found")
+            if target.username == actor["username"]:
+                raise HTTPException(409, "Cannot delete current account")
+            blocked = set(db.scalars(select(BlockedUser.user_id)))
+            if target.role == "admin" and target.id not in blocked and sum(u.role == "admin" and u.id not in blocked for u in all_users) <= 1:
+                raise HTTPException(409, "Cannot delete last administrator")
+            tokens = revoke_sessions(db, user_id)
+            db.execute(delete(BlockedUser).where(BlockedUser.user_id == user_id))
+            name = target.username
+            db.delete(target)
+            audit(db, actor["username"], f"deleted {name}; sessions revoked")
+            db.commit()
+        for token in tokens:
+            app.state.orca_revoke_hash(token)
+        return {"ok": True, "deleted": name}
+
+    @app.post("/api/account/password")
+    def change_own_password(data: PasswordChange, request: Request, user=Depends(authenticated)):
+        current_token = token_hash(request.cookies.get("kosmos_session", ""))
+        with Session(engine) as db:
+            me = db.scalar(select(User).where(User.username == user["username"]))
+            if not me:
+                raise HTTPException(404, "User not found")
+            if not verify_password(data.current, me.password_hash):
+                # 403, not 401: a wrong current password must not log the user out.
+                raise HTTPException(403, "Current password incorrect")
+            me.password_hash = password_hash(data.new)
+            tokens = revoke_sessions(db, me.id, keep=current_token)
+            audit(db, me.username, "changed own password; other sessions revoked")
+            db.commit()
+        for token in tokens:
+            app.state.orca_revoke_hash(token)
+        return {"ok": True, "other_sessions_revoked": len(tokens)}
 
     @app.get("/api/admin/operations")
     def operations(actor=Depends(admin)):

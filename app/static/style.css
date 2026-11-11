@@ -3,3 +3,5 @@
 #users .record{display:grid;gap:10px}#users label{grid-template-columns:24px 1fr;align-items:center}input[type=checkbox]{width:auto;padding:0;justify-self:start}
 
 .history-header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}.history-header h2{margin-bottom:4px}.history-help{margin:8px 0 12px}.events-list{min-width:0}.events-list .record{padding:10px 0}.events-list .record strong{margin-bottom:4px}.events-list .record p{line-height:1.5}.history-panel:not(.expanded) .record:nth-child(n+4){display:none}.history-panel:not(.expanded) .record p{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.history-panel.expanded .events-list{max-height:520px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}.history-panel.expanded .record p{white-space:pre-wrap}.events-toggle{margin-top:12px}.events-toggle:focus-visible,.events-list:focus-visible{outline:2px solid #91b5ff;outline-offset:4px}
+button.danger{background:#b3261e;color:#fff;border-color:#b3261e}
+button.danger:hover{background:#8c1d18}

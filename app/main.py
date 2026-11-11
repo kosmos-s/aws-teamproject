@@ -97,7 +97,7 @@ def create_app(settings=None):
             user = db.get(User, row.user_id)
             if not user or db.get(BlockedUser, user.id):
                 raise HTTPException(401, "Login required")
-            if user.role == "viewer" and request.method not in {"GET", "HEAD"} and request.url.path != "/api/logout":
+            if user.role == "viewer" and request.method not in {"GET", "HEAD"} and request.url.path not in {"/api/logout", "/api/account/password"}:
                 raise HTTPException(403, "Read-only account")
             if request.method not in {"GET", "HEAD"} and not secrets.compare_digest(request.headers.get("x-csrf-token", ""), row.csrf):
                 raise HTTPException(403, "CSRF rejected")

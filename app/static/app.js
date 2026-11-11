@@ -9,13 +9,43 @@ async function api(path, options = {}) {
     options.headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify(options.body);
   }
-  const response = await fetch(path, options);
+  let response;
+  try { response = await fetch(path, options); }
+  catch { throw new Error('서버에 연결할 수 없습니다. 운영 시간이 끝났거나 네트워크 문제일 수 있습니다.'); }
+  let data = null;
+  try { data = await response.json(); } catch { data = null; }
   if (!response.ok) {
-    if (response.status === 401) showLogin();
-    throw new Error(`요청 실패 (${response.status}). 로그인 상태와 입력을 확인하세요.`);
+    const detail = data && typeof data.detail === 'string' ? data.detail : '';
+    if (response.status === 401 && path !== '/api/login') { showLogin(); throw new Error('로그인이 필요하거나 만료되었습니다. 다시 로그인하세요.'); }
+    throw new Error(ERRORS[detail] || STATUS_ERRORS[response.status] || `요청을 처리하지 못했습니다 (${response.status}).`);
   }
-  return response.json();
+  if (data === null) throw new Error('서버 응답을 읽지 못했습니다. 잠시 후 다시 시도하세요.');
+  return data;
 }
+const ERRORS = {
+  'Invalid credentials': '아이디 또는 비밀번호가 올바르지 않습니다.',
+  'Try again in five minutes': '로그인 실패가 많아 5분 동안 막혔습니다. 잠시 후 다시 시도하세요.',
+  'Read-only account': '조회 전용 계정은 저장할 수 없습니다.',
+  'Administrator required': '관리자만 할 수 있습니다.',
+  'CSRF rejected': '보안 확인에 실패했습니다. 새로고침 후 다시 시도하세요.',
+  'Origin rejected': '허용되지 않은 주소에서 보낸 요청입니다. 포털 주소로 다시 접속하세요.',
+  'Username already exists': '이미 있는 아이디입니다.',
+  'Cannot lock current or last administrator': '자기 자신이나 마지막 관리자는 잠그거나 권한을 낮출 수 없습니다.',
+  'Cannot delete current account': '지금 로그인한 자기 계정은 삭제할 수 없습니다.',
+  'Cannot delete last administrator': '마지막 관리자는 삭제할 수 없습니다.',
+  'Use your own password change': '자기 비밀번호는 \'내 비밀번호 변경\'에서 바꾸세요.',
+  'Current password incorrect': '현재 비밀번호가 올바르지 않습니다.',
+  'User not found': '계정을 찾을 수 없습니다. 새로고침하세요.',
+  'Project not found': '프로젝트를 찾을 수 없습니다. 새로고침하세요.',
+  'File not found': '파일을 찾을 수 없습니다.',
+  'Allowed: txt, png, jpg, pdf': 'TXT, PNG, JPG, PDF 파일만 올릴 수 있습니다.',
+  'Maximum 1 MiB': '파일은 1MiB까지 올릴 수 있습니다.',
+  'Request too large': '요청이 너무 큽니다.',
+  'Invalid input': '입력값을 확인하세요. 빈 칸이나 허용되지 않은 문자가 있습니다.',
+  'Storage unavailable': '파일 저장소에 연결하지 못했습니다. 잠시 후 다시 시도하세요.',
+  'Database unavailable': '데이터베이스에 연결하지 못했습니다. 잠시 후 다시 시도하세요.',
+};
+const STATUS_ERRORS = {400:'요청이 올바르지 않습니다.',403:'권한이 없습니다.',404:'대상을 찾을 수 없습니다.',409:'현재 상태에서는 할 수 없는 작업입니다.',413:'요청이 너무 큽니다.',422:'입력값을 확인하세요.',429:'요청이 너무 많습니다. 잠시 후 다시 시도하세요.',500:'서버 내부 오류가 발생했습니다.',502:'서버가 응답하지 않습니다. 운영 시간인지 확인하세요.',503:'서버를 잠시 사용할 수 없습니다.',504:'서버 응답 시간이 초과되었습니다.'};
 function applySession(session) {
   currentUser = session; csrf = session.csrf; $('identity').textContent = session.username;
   for (const id of ['admin-tools','account-tools','operations-tools']) $(id).hidden = session.role !== 'admin';
@@ -98,9 +128,20 @@ form('login-form', async data => {
   const session = await api('/api/session'); applySession(session);
   $('login-form').reset(); $('login').hidden = true; $('dashboard').hidden = false; await refresh();
 });
+form('password-form', async data => {
+  const result = await api('/api/account/password', {method:'POST', body:{current:data.get('current'), new:data.get('new')}});
+  $('password-form').reset();
+  message(`비밀번호를 바꿨습니다. 다른 로그인 ${result.other_sessions_revoked}개를 끊었습니다.`);
+});
 form('project-form', async data => { await api('/api/projects', {method:'POST',body:Object.fromEntries(data)}); $('project-form').reset(); await refresh(); });
-form('note-form', async data => { await api(`/api/projects/${data.get('project_id')}/notes`, {method:'POST',body:{body:data.get('body')}}); $('note-form').elements.body.value = ''; await refresh(); });
-form('upload-form', async data => { const id = data.get('project_id'); data.delete('project_id'); await api(`/api/projects/${id}/attachments`, {method:'POST',body:data}); $('upload-form').elements.file.value = ''; await files(); });
+form('note-form', async data => { if (!data.get('project_id')) throw new Error('먼저 프로젝트를 만들거나 선택하세요.'); if (!String(data.get('body')||'').trim()) throw new Error('메모 내용을 입력하세요.'); await api(`/api/projects/${data.get('project_id')}/notes`, {method:'POST',body:{body:data.get('body')}}); $('note-form').elements.body.value = ''; await refresh(); });
+form('upload-form', async data => {
+  const file = data.get('file');
+  if (!data.get('project_id')) throw new Error('먼저 프로젝트를 만들거나 선택하세요.');
+  if (!file || !file.name) throw new Error('올릴 파일을 선택하세요.');
+  if (!/\.(txt|png|jpg|pdf)$/i.test(file.name)) throw new Error('TXT, PNG, JPG, PDF 파일만 올릴 수 있습니다.');
+  if (file.size > 1024 * 1024) throw new Error('파일은 1MiB까지 올릴 수 있습니다.');
+  const id = data.get('project_id'); data.delete('project_id'); await api(`/api/projects/${id}/attachments`, {method:'POST',body:data}); $('upload-form').elements.file.value = ''; await files(); });
 $('upload-project').addEventListener('change', () => files().catch(error => message(error.message)));
 $('events-toggle').addEventListener('click', () => {
   const button = $('events-toggle');

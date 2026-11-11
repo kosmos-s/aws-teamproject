@@ -18,7 +18,27 @@ async function refreshAdmin() {
       try {await api(`/api/admin/users/${user.id}`,{method:'PATCH',body:{active:active.checked,role:role.value}});await refreshAdmin();message('접근 권한을 적용하고 기존 세션을 회수했습니다.');}
       catch(error){message(error.message);button.disabled=false;}
     });
-    node.append(role,label,button); $('users').append(node);
+    node.append(role,label,button);
+    if (user.username !== currentUser.username) {
+      const pw=document.createElement('input'); pw.type='password'; pw.placeholder='새 비밀번호'; pw.autocomplete='new-password'; pw.maxLength=256;
+      pw.setAttribute('aria-label', user.username + ' 새 비밀번호');
+      const reset=document.createElement('button'); reset.textContent='비밀번호 재설정'; reset.className='secondary';
+      reset.addEventListener('click', async () => {
+        if (!pw.value) { message('새 비밀번호를 입력하세요.'); pw.focus(); return; }
+        reset.disabled=true;
+        try {await api(`/api/admin/users/${user.id}/password`,{method:'PUT',body:{password:pw.value}}); pw.value=''; message(`${user.username} 비밀번호를 바꾸고 기존 접속을 끊었습니다. 새 비밀번호는 안전한 경로로 전달하세요.`);}
+        catch(error){message(error.message);} finally {reset.disabled=false;}
+      });
+      const remove=document.createElement('button'); remove.textContent='계정 삭제'; remove.className='danger';
+      remove.addEventListener('click', async () => {
+        if (!window.confirm(`${user.username} 계정을 삭제할까요? 되돌릴 수 없습니다. (작성한 메모는 남습니다)`)) return;
+        remove.disabled=true;
+        try {await api(`/api/admin/users/${user.id}`,{method:'DELETE'}); await refreshAdmin(); message(`${user.username} 계정을 삭제했습니다.`);}
+        catch(error){message(error.message); remove.disabled=false;}
+      });
+      node.append(pw,reset,remove);
+    }
+    $('users').append(node);
   }
   $('operations').replaceChildren();
   const state={unknown:'확인 기록 없음',stale:'오래된 확인 기록',current:'최근 운영자 확인'}[ops.state] || ops.state;
