@@ -37,6 +37,13 @@ class Note(Base):
     created = Column(String(40), nullable=False)
 
 
+class OrcaProject(Base):
+    __tablename__ = "orca_projects"
+    project_id = Column(Integer, ForeignKey("projects.id"), primary_key=True)
+    label = Column(String(120), nullable=False)
+    repository_url = Column(String(255), nullable=False)
+
+
 class Attachment(Base):
     __tablename__ = "attachments"
     id = Column(Integer, primary_key=True)

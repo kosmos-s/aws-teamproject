@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
 from .config import Settings
-from .models import Base, User, LoginSession, Project, Note, Attachment, Event
+from .models import Base, User, LoginSession, Project, Note, Attachment, Event, OrcaProject
 from .security import verify_password, token_hash, password_hash
 from .storage import Storage
 
@@ -125,6 +125,7 @@ def create_app(settings=None):
         with Session(engine) as db:
             db.execute(delete(LoginSession).where(LoginSession.token_hash == token_hash(request.cookies.get("kosmos_session", ""))))
             db.commit()
+        app.state.orca_revoke(request.cookies.get("kosmos_session", ""))
         response = JSONResponse({"ok": True})
         response.delete_cookie("kosmos_session", secure=settings.secure_cookies, httponly=True, samesite="lax")
         return response
@@ -132,7 +133,9 @@ def create_app(settings=None):
     @app.get("/api/projects")
     def projects(user=Depends(authenticated)):
         with Session(engine) as db:
-            return [{"id": p.id, "name": p.name, "description": p.description, "created": p.created} for p in db.scalars(select(Project).order_by(Project.id))]
+            return [{"id": p.id, "name": p.name, "description": p.description, "created": p.created,
+                     "orca_available": db.get(OrcaProject, p.id) is not None,
+                     "repository_url": (db.get(OrcaProject, p.id).repository_url if db.get(OrcaProject, p.id) else None)} for p in db.scalars(select(Project).order_by(Project.id))]
 
     @app.post("/api/projects", status_code=201)
     def add_project(data: ProjectInput, user=Depends(authenticated)):
@@ -226,4 +229,6 @@ def create_app(settings=None):
     def index():
         return (Path(__file__).parent / "templates" / "index.html").read_text(encoding="utf-8")
 
+    from .orca_gateway import install_orca_routes
+    install_orca_routes(app, settings, authenticated)
     return app

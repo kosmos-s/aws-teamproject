@@ -59,3 +59,7 @@
 
 ![공개 로그인 화면](public-evidence/portal-login.png)
 ![인증된 운영 대시보드](public-evidence/portal-dashboard.png)
+
+
+## Orca·Webmin 통합 후속 작업
+[연결 검증 기록](orca-access-verification.md)에 실제 확인 범위, 미검증 항목과 로컬 준비 변경을 구분했다. 기존 종료 예약을 유지하며 사용자 요청으로 서버는 재시작하지 않는다.

@@ -53,3 +53,7 @@ Orca 서비스 활성, 브라우저 사용, 실제 AI 요청, 3인 접속, 재�
 서버 초기 설정은 `deploy/portal-configure.py`, 실제 데이터 검증은 `deploy/verify-portal.py`. 초기 설정은 새 DB 전용으로, 운영 중 반복 실행하지 않는다. DB 초기화용 SSM 읽기 권한은 설치 후 제거했다.
 Nginx 설정은 deploy/portal-nginx.conf의 도메인을 대체해 사용하고 Certbot으로 인증서를 적용했다. 최초 webroot 인증은 전환 시점의 challenge 경로 404로 실패했으며, 명시적 challenge 경로와 Nginx 플러그인 적용 후 발급·외부 HTTPS 검증에 성공했다.
 서비스 재시작 후 RDS·S3 유지와 별도 복구 검증을 재실행했다. 포털 계정 정보는 공개 Git에 올리지 않는다. 운영 명령과 복구는 docs/portal-operations.md를 따른다.
+
+
+## Orca·Webmin 통합 후속 작업
+[연결 검증 기록](orca-access-verification.md)에 실제 확인 범위, 미검증 항목과 로컬 준비 변경을 구분했다. 기존 종료 예약을 유지하며 사용자 요청으로 서버는 재시작하지 않는다.
