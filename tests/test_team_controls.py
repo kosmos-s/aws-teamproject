@@ -53,6 +53,10 @@ class TeamControlsTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertNotIn("password", response.text)
         self.login(self.client, "guest")
+        # Admin-created accounts must replace the initial password before anything else.
+        self.assertEqual(self.client.get("/api/projects").status_code, 403)
+        self.assertTrue(self.client.get("/api/session").json()["must_change"])
+        self.assertEqual(self.client.post("/api/account/password", json={"current": "A-team-test-password-93", "new": "guest-own-pass"}).status_code, 200)
         self.assertEqual(self.client.get("/api/projects").status_code, 200)
         self.assertEqual(self.client.post("/api/projects", json={"name": "Forbidden"}).status_code, 403)
         self.assertEqual(self.client.get("/api/orca/authorize").status_code, 403)
@@ -69,42 +73,42 @@ class TeamControlsTests(unittest.TestCase):
 
     def test_admin_resets_password_and_revokes_sessions(self):
         member = self.member_client()
-        response = self.client.put(f"/api/admin/users/{self.user_id('member')}/password", json={"password": "new1"})
+        response = self.client.put(f"/api/admin/users/{self.user_id('member')}/password", json={"password": "newpass1"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["sessions_revoked"], 1)
         self.assertEqual(member.get("/api/projects").status_code, 401)
         self.assertEqual(member.post("/api/login", json={"username": "member", "password": "A-team-test-password-93"}).status_code, 401)
-        self.assertEqual(member.post("/api/login", json={"username": "member", "password": "new1"}).status_code, 200)
-        self.assertNotIn("new1", response.text)
+        self.assertEqual(member.post("/api/login", json={"username": "member", "password": "newpass1"}).status_code, 200)
+        self.assertNotIn("newpass1", response.text)
         member.close()
 
     def test_password_reset_refusals(self):
-        self.assertEqual(self.client.put(f"/api/admin/users/{self.user_id('owner')}/password", json={"password": "x"}).status_code, 409)
-        self.assertEqual(self.client.put("/api/admin/users/9999/password", json={"password": "x"}).status_code, 404)
-        self.assertEqual(self.client.put(f"/api/admin/users/{self.user_id('member')}/password", json={"password": ""}).status_code, 422)
+        self.assertEqual(self.client.put(f"/api/admin/users/{self.user_id('owner')}/password", json={"password": "longenough1"}).status_code, 409)
+        self.assertEqual(self.client.put("/api/admin/users/9999/password", json={"password": "longenough1"}).status_code, 404)
+        self.assertEqual(self.client.put(f"/api/admin/users/{self.user_id('member')}/password", json={"password": "short7!"}).status_code, 422)
         member = self.member_client()
-        self.assertEqual(member.put(f"/api/admin/users/{self.user_id('owner')}/password", json={"password": "x"}).status_code, 403)
+        self.assertEqual(member.put(f"/api/admin/users/{self.user_id('owner')}/password", json={"password": "longenough1"}).status_code, 403)
         member.close()
 
     def test_user_changes_own_password_keeps_current_session(self):
         other = self.member_client()
         member = self.member_client()
-        wrong = member.post("/api/account/password", json={"current": "nope", "new": "abc"})
+        wrong = member.post("/api/account/password", json={"current": "nope", "new": "abcdefgh"})
         self.assertEqual(wrong.status_code, 403)
         self.assertEqual(member.get("/api/session").status_code, 200)
-        ok = member.post("/api/account/password", json={"current": "A-team-test-password-93", "new": "abc"})
+        ok = member.post("/api/account/password", json={"current": "A-team-test-password-93", "new": "abcdefgh"})
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(ok.json()["other_sessions_revoked"], 1)
         self.assertEqual(member.get("/api/session").status_code, 200)
         self.assertEqual(other.get("/api/session").status_code, 401)
-        self.assertEqual(other.post("/api/login", json={"username": "member", "password": "abc"}).status_code, 200)
+        self.assertEqual(other.post("/api/login", json={"username": "member", "password": "abcdefgh"}).status_code, 200)
         other.close(); member.close()
 
     def test_viewer_can_change_own_password(self):
         create_user(self.app.state.engine, "watcher", "A-team-test-password-93", "viewer")
         viewer = TestClient(self.app); viewer.headers["Origin"] = "http://testserver"
         self.login(viewer, "watcher")
-        self.assertEqual(viewer.post("/api/account/password", json={"current": "A-team-test-password-93", "new": "v"}).status_code, 200)
+        self.assertEqual(viewer.post("/api/account/password", json={"current": "A-team-test-password-93", "new": "viewer-pw-1"}).status_code, 200)
         self.assertEqual(viewer.post("/api/projects", json={"name": "x"}).status_code, 403)
         viewer.close()
 
@@ -119,7 +123,7 @@ class TeamControlsTests(unittest.TestCase):
         self.assertEqual(member.post("/api/login", json={"username": "member", "password": "A-team-test-password-93"}).status_code, 401)
         self.assertNotIn("member", [u["username"] for u in self.client.get("/api/admin/users").json()])
         self.assertEqual(self.client.get("/api/notes").json()[0]["author"], "member")
-        recreated = self.client.post("/api/admin/users", json={"username": "member", "password": "x", "role": "member"})
+        recreated = self.client.post("/api/admin/users", json={"username": "member", "password": "recreate1", "role": "member"})
         self.assertEqual(recreated.status_code, 201)
         member.close()
 
@@ -137,9 +141,11 @@ class TeamControlsTests(unittest.TestCase):
         self.assertEqual(second.delete(f"/api/admin/users/{boss2_id}").status_code, 409)
         second.close()
 
-    def test_short_password_allowed_but_empty_rejected(self):
-        short = self.client.post("/api/admin/users", json={"username": "shorty", "password": "1234", "role": "member"})
-        self.assertEqual(short.status_code, 201)
+    def test_password_needs_eight_characters(self):
+        short = self.client.post("/api/admin/users", json={"username": "shorty", "password": "1234567", "role": "member"})
+        self.assertEqual(short.status_code, 422)
+        ok = self.client.post("/api/admin/users", json={"username": "eight", "password": "abcd1234", "role": "member"})
+        self.assertEqual(ok.status_code, 201)
         empty = self.client.post("/api/admin/users", json={"username": "blank", "password": "", "role": "member"})
         self.assertEqual(empty.status_code, 422)
         self.assertNotIn("blank", [u["username"] for u in self.client.get("/api/admin/users").json()])

@@ -10,7 +10,10 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select, delete
 from sqlalchemy.orm import Session
-from .models import Project, Note, Attachment, Event
+from .models import Project, Note, Attachment, Event, ChatMessage, ProjectArchive, NoteEdit
+
+# Backup v2 adds team chat (main + group rooms; private 1:1 messages are excluded), archive state and note edits.
+EXTRA = [ProjectArchive, NoteEdit, ChatMessage]
 
 
 def event(engine, kind, state, summary):
@@ -54,10 +57,17 @@ def backup(engine, storage):
         budget = 16 * 1024 * 1024
         estimated = 1024
         with engine.begin() as conn:
-            for model in [Project, Note, Attachment]:
+            for model in [Project, Note, Attachment] + EXTRA:
                 rows = []
-                for r in conn.execute(select(model.__table__).limit(10001)).mappings():
+                query = select(model.__table__)
+                if model is ChatMessage:
+                    query = query.where(ChatMessage.room != "dm")
+                for r in conn.execute(query.limit(10001)).mappings():
                     row = dict(r)
+                    if model is ChatMessage:
+                        # Accounts are not backed up; keep the author by name only.
+                        row["sender_id"] = None
+                        row["recipient_id"] = None
                     estimated += len(json.dumps(row, ensure_ascii=False).encode()) + 4
                     if model == Attachment:
                         estimated += ((row["size"] + 2) // 3) * 4 + 256
@@ -72,7 +82,7 @@ def backup(engine, storage):
             if estimated > budget:
                 raise ValueError("Backup actual objects exceed size budget")
             files[row["key"]] = {"content": base64.b64encode(data).decode(), "sha256": hashlib.sha256(data).hexdigest()}
-        payload = json.dumps({"version": 1, "tables": tables, "files": files}, ensure_ascii=False).encode()
+        payload = json.dumps({"version": 2, "tables": tables, "files": files}, ensure_ascii=False).encode()
         if len(payload) > 16 * 1024 * 1024:
             raise ValueError("Backup exceeds 16 MiB lab limit")
         key = "backups/" + secrets.token_hex(16) + ".json"
@@ -88,7 +98,9 @@ def restore(engine, storage, archive):
     """Restore business data only into a fresh DB; never restore credentials/sessions."""
     try:
         payload = json.loads(archive)
-        if payload["version"] != 1 or set(payload["tables"]) != {"projects", "work_notes", "attachments"}:
+        base = {"projects", "work_notes", "attachments"}
+        v2 = base | {m.__tablename__ for m in EXTRA}
+        if not ((payload["version"] == 1 and set(payload["tables"]) == base) or (payload["version"] == 2 and set(payload["tables"]) == v2)):
             raise ValueError("Unsupported backup")
         tables, files = payload["tables"], payload["files"]
         expected_keys = {row["key"] for row in tables["attachments"]}
@@ -104,10 +116,11 @@ def restore(engine, storage, archive):
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise ValueError("Invalid backup") from exc
     with engine.begin() as conn:
-        for model in [Project, Note, Attachment]:
+        models = [m for m in [Project, Note, Attachment] + EXTRA if m.__tablename__ in tables]
+        for model in models:
             if conn.execute(select(model.__table__).limit(1)).first():
                 raise ValueError("Restore target must be empty")
-        for model in [Project, Note, Attachment]:
+        for model in models:
             rows = tables[model.__tablename__]
             if rows:
                 conn.execute(model.__table__.insert(), rows)

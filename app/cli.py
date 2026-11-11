@@ -24,7 +24,7 @@ def main():
     engine, storage = app.state.engine, app.state.storage
     try:
         if args.command == "create-user":
-            password = getpass.getpass("New portal password: ")
+            password = getpass.getpass("New portal password (8+ characters): ")
             if password != getpass.getpass("Confirm password: "):
                 raise ValueError("Passwords do not match")
             create_user(engine, args.username, password, args.role)

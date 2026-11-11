@@ -101,3 +101,44 @@ class OrcaLinkRequest(Base):
     requested_by = Column(String(80), nullable=False)
     created = Column(String(40), nullable=False)
     finished = Column(String(40), nullable=True)
+
+
+# --- 2026-11-11 additions. Separate tables instead of ALTERing live ones. ---
+class ProjectArchive(Base):
+    """A row here means the project is archived (hidden from active lists, kept for history)."""
+    __tablename__ = "project_archives"
+    project_id = Column(Integer, ForeignKey("projects.id"), primary_key=True)
+    archived_by = Column(String(80), nullable=False)
+    archived_at = Column(String(40), nullable=False)
+
+
+class NoteEdit(Base):
+    """Last edit of a work note (shown as '수정됨')."""
+    __tablename__ = "note_edits"
+    note_id = Column(Integer, ForeignKey("work_notes.id"), primary_key=True)
+    edited_by = Column(String(80), nullable=False)
+    edited_at = Column(String(40), nullable=False)
+
+
+class TeamGroup(Base):
+    """A team / department / club cohort. Each group has its own chat room (room='g<id>')."""
+    __tablename__ = "team_groups"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(80), unique=True, nullable=False)
+    description = Column(String(300), nullable=False, default="")
+    created = Column(String(40), nullable=False)
+
+
+class GroupMember(Base):
+    __tablename__ = "group_members"
+    group_id = Column(Integer, ForeignKey("team_groups.id"), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+
+
+class UserActivity(Base):
+    """Last login / last seen and the 'must change password' flag for each account."""
+    __tablename__ = "user_activity"
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    last_login = Column(String(40), nullable=True)
+    last_seen = Column(String(40), nullable=True)
+    must_change = Column(Integer, nullable=False, default=0)

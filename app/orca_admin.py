@@ -3,6 +3,7 @@
 The web never runs commands. It validates and records a request; the fixed worker
 (deploy/orca-link-worker.py, root systemd timer) clones as the `orca` user and registers it.
 """
+import json
 import re
 from datetime import datetime, timezone
 
@@ -15,6 +16,8 @@ from .models import Project, OrcaProject, OrcaLinkRequest, Event
 
 GITHUB_URL = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]{1,100})/([A-Za-z0-9_.-]{1,100}?)(?:\.git)?/?$")
 FOLDER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+# Non-GitHub modes are stored as these markers in repository_url (no schema change needed).
+NEW_FOLDER, EXISTING_FOLDER = "(new)", "(existing)"
 
 
 def normalize_repo(url):
@@ -32,12 +35,24 @@ def valid_folder(name):
 
 class LinkInput(BaseModel):
     project_id: int
-    repository_url: str = Field(min_length=1, max_length=255)
+    mode: str = Field(default="github", pattern=r"^(github|new|existing)$")
+    repository_url: str = Field(default="", max_length=255)
     folder: str = Field(default="", max_length=100)
+
+
+def read_folders(data_dir):
+    """Folder list published by the root worker; the portal user cannot read /home/orca itself."""
+    try:
+        data = json.loads((data_dir / "orca-folders.json").read_text(encoding="utf-8"))
+        return {"folders": [f for f in data.get("folders", []) if valid_folder(f.get("name", ""))][:500],
+                "updated": data.get("updated")}
+    except (OSError, ValueError, AttributeError):
+        return {"folders": [], "updated": None}
 
 
 def install_orca_admin_routes(app, admin):
     engine = app.state.engine
+    data_dir = app.state.settings.data_dir
 
     def audit(db, actor, summary):
         db.add(Event(kind="orca-link", state="ok", created=datetime.now(timezone.utc).isoformat(), summary=f"{actor}: {summary}"))
@@ -53,6 +68,7 @@ def install_orca_admin_routes(app, admin):
                 "projects": [{"id": i, "name": n, "linked": i in linked} for i, n in projects.items()],
                 "mappings": [{"project_id": m.project_id, "project": projects.get(m.project_id, "?"), "label": m.label,
                               "repository_url": m.repository_url} for m in maps],
+                "server_folders": read_folders(data_dir),
                 "requests": [{"id": r.id, "project": projects.get(r.project_id, "?"), "repository_url": r.repository_url,
                               "folder": r.folder, "state": r.state, "detail": r.detail, "requested_by": r.requested_by,
                               "created": r.created, "finished": r.finished} for r in reqs],
@@ -60,10 +76,13 @@ def install_orca_admin_routes(app, admin):
 
     @app.post("/api/admin/orca-links", status_code=201)
     def request_link(data: LinkInput, actor=Depends(admin)):
-        try:
-            url, default_folder = normalize_repo(data.repository_url)
-        except ValueError:
-            raise HTTPException(422, "Invalid repository URL")
+        if data.mode == "github":
+            try:
+                url, default_folder = normalize_repo(data.repository_url)
+            except ValueError:
+                raise HTTPException(422, "Invalid repository URL")
+        else:
+            url, default_folder = (NEW_FOLDER if data.mode == "new" else EXISTING_FOLDER), ""
         folder = (data.folder or default_folder).strip()
         if not valid_folder(folder):
             raise HTTPException(422, "Invalid folder name")

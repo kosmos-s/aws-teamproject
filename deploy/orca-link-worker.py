@@ -47,10 +47,32 @@ def short(text):
     return " ".join((text or "").split())[-300:]
 
 
+def publish_folders():
+    """Write the list of /home/orca/projects folders where the portal can read it."""
+    import json
+    from app.orca_admin import valid_folder
+    data_dir = Path(os.environ.get("DATA_DIR", "/var/lib/kosmos-portal"))
+    items = []
+    if PROJECTS.is_dir():
+        for d in sorted(PROJECTS.iterdir()):
+            if d.is_dir() and not d.is_symlink() and valid_folder(d.name):
+                items.append({"name": d.name, "git": (d / ".git").exists()})
+    target = data_dir / "orca-folders.json"
+    tmp = target.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"updated": now(), "folders": items[:500]}), encoding="utf-8")
+    try:
+        st = data_dir.stat(); os.chown(tmp, st.st_uid, st.st_gid)
+    except (OSError, AttributeError):
+        pass
+    os.chmod(tmp, 0o640)
+    tmp.replace(target)
+
+
 def process(db, req):
-    from app.orca_admin import normalize_repo, valid_folder
+    from app.orca_admin import normalize_repo, valid_folder, NEW_FOLDER, EXISTING_FOLDER
     from app.models import OrcaProject, Project
-    url, _ = normalize_repo(req.repository_url)
+    mode = "new" if req.repository_url == NEW_FOLDER else "existing" if req.repository_url == EXISTING_FOLDER else "github"
+    url = normalize_repo(req.repository_url)[0] if mode == "github" else ""
     if not valid_folder(req.folder):
         raise RuntimeError("폴더 이름이 올바르지 않습니다")
     if not db.get(Project, req.project_id):
@@ -58,7 +80,23 @@ def process(db, req):
     target = PROJECTS / req.folder
     if target.resolve().parent != PROJECTS.resolve():
         raise RuntimeError("허용되지 않은 경로입니다")
-    if target.exists():
+    if mode == "new":
+        if target.exists():
+            raise RuntimeError("같은 이름의 폴더가 이미 있습니다. '서버 폴더 선택'을 쓰거나 다른 이름을 쓰세요")
+        for args in (["mkdir", "--", str(target)], ["git", "init", "-q", "-b", "main", str(target)]):
+            r = as_orca(args, 30)
+            if r.returncode != 0:
+                raise RuntimeError("빈 프로젝트 생성 실패: " + short(r.stderr))
+        step = "빈 프로젝트 생성(git init)"
+    elif mode == "existing":
+        if not target.is_dir() or target.is_symlink():
+            raise RuntimeError("서버에 그 폴더가 없습니다")
+        if not (target / ".git").exists():
+            r = as_orca(["git", "init", "-q", "-b", "main", str(target)], 30)
+            if r.returncode != 0:
+                raise RuntimeError("git 초기화 실패: " + short(r.stderr))
+        step = "기존 서버 폴더 사용"
+    elif target.exists():
         if origin_of(target) != url:
             raise RuntimeError("같은 이름의 폴더가 다른 저장소로 이미 있습니다. 다른 폴더 이름을 쓰세요")
         step = "기존 체크아웃 사용"
@@ -85,6 +123,10 @@ def main():
     from app.models import Base, OrcaLinkRequest, Event
     engine = create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
     Base.metadata.create_all(engine)
+    try:
+        publish_folders()
+    except Exception:
+        pass  # listing is a convenience; never block link processing
     with Session(engine) as db:
         # A request stuck in "running" for 10 minutes means a previous run died; fail it visibly.
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
@@ -99,6 +141,10 @@ def main():
         try:
             req.detail = process(db, req)[:500]
             req.state = "done"
+            try:
+                publish_folders()
+            except Exception:
+                pass
         except Exception as exc:  # report, never crash the timer
             db.rollback()
             req = db.get(OrcaLinkRequest, req.id)

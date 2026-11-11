@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
 from .config import Settings
-from .models import Base, User, LoginSession, Project, Note, Attachment, Event, OrcaProject, BlockedUser
+from .models import Base, User, LoginSession, Project, Note, Attachment, Event, OrcaProject, BlockedUser, ProjectArchive, NoteEdit
+from .teamwork import activity, must_change as needs_password_change
 from .security import verify_password, token_hash, password_hash
 from .storage import Storage
 
@@ -62,6 +63,9 @@ def create_app(settings=None):
     app.state.settings = settings
     app.state.storage = Storage(settings)
     failures = {}
+    account_failures = {}  # per-username lockout, independent of client IP
+    seen = {}  # user_id -> last time last_seen was written (throttle DB writes)
+    FORCED_OK = {"/api/session", "/api/logout", "/api/account/password"}
     dummy_hash = password_hash("unmatched-dummy-password")
 
     @app.exception_handler(RequestValidationError)
@@ -101,7 +105,14 @@ def create_app(settings=None):
                 raise HTTPException(403, "Read-only account")
             if request.method not in {"GET", "HEAD"} and not secrets.compare_digest(request.headers.get("x-csrf-token", ""), row.csrf):
                 raise HTTPException(403, "CSRF rejected")
-            return {"username": user.username, "role": user.role, "csrf": row.csrf}
+            forced = needs_password_change(db, user.id)
+            if forced and request.url.path not in FORCED_OK:
+                raise HTTPException(403, "Password change required")
+            if time.time() - seen.get(user.id, 0) > 60:
+                seen[user.id] = time.time()
+                activity(db, user.id).last_seen = now()
+                db.commit()
+            return {"username": user.username, "role": user.role, "csrf": row.csrf, "must_change": forced}
 
     @app.post("/api/login")
     def login(data: LoginInput, request: Request):
@@ -109,16 +120,25 @@ def create_app(settings=None):
         recent = [t for t in failures.get(key, []) if time.time() - t < 300]
         if len(recent) >= 5:
             raise HTTPException(429, "Try again in five minutes")
+        account = data.username.strip().lower()[:80]
+        account_recent = [t for t in account_failures.get(account, []) if time.time() - t < 900]
+        if len(account_recent) >= 8:
+            # Stops guessing one account from many IPs; checked before the password is tried.
+            raise HTTPException(429, "Account temporarily locked")
         with Session(engine) as db:
             user = db.scalar(select(User).where(User.username == data.username))
             valid = verify_password(data.password, user.password_hash if user else dummy_hash)
             if not user or not valid or db.get(BlockedUser, user.id):
                 failures[key] = recent + [time.time()]
+                account_failures[account] = account_recent + [time.time()]
                 raise HTTPException(401, "Invalid credentials")
             failures.pop(key, None)
+            account_failures.pop(account, None)
             db.execute(delete(LoginSession).where(LoginSession.expires <= time.time()))
             token, csrf = secrets.token_urlsafe(32), secrets.token_hex(32)
             db.add(LoginSession(token_hash=token_hash(token), user_id=user.id, csrf=csrf, expires=time.time() + 28800))
+            act = activity(db, user.id)
+            act.last_login = act.last_seen = now()
             db.commit()
         response = JSONResponse({"csrf": csrf})
         response.set_cookie("kosmos_session", token, max_age=28800, httponly=True, secure=settings.secure_cookies, samesite="lax")
@@ -141,7 +161,9 @@ def create_app(settings=None):
     @app.get("/api/projects")
     def projects(user=Depends(authenticated)):
         with Session(engine) as db:
+            archived = {a.project_id: a for a in db.scalars(select(ProjectArchive))}
             return [{"id": p.id, "name": p.name, "description": p.description, "created": p.created,
+                     "archived": p.id in archived,
                      "orca_available": db.get(OrcaProject, p.id) is not None,
                      "repository_url": (db.get(OrcaProject, p.id).repository_url if db.get(OrcaProject, p.id) else None)} for p in db.scalars(select(Project).order_by(Project.id))]
 
@@ -156,7 +178,9 @@ def create_app(settings=None):
     @app.get("/api/notes")
     def notes(user=Depends(authenticated)):
         with Session(engine) as db:
-            return [{"id": n.id, "project_id": n.project_id, "body": n.body, "author": n.author, "created": n.created} for n in db.scalars(select(Note).order_by(Note.id.desc()).limit(100))]
+            edits = {e.note_id: e for e in db.scalars(select(NoteEdit))}
+            return [{"id": n.id, "project_id": n.project_id, "body": n.body, "author": n.author, "created": n.created,
+                     "edited": edits[n.id].edited_at if n.id in edits else None} for n in db.scalars(select(Note).order_by(Note.id.desc()).limit(100))]
 
     @app.post("/api/projects/{project_id}/notes", status_code=201)
     def add_note(project_id: int, data: NoteInput, user=Depends(authenticated)):

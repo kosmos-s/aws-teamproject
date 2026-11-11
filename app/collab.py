@@ -12,7 +12,7 @@ from sqlalchemy import select, func, or_, and_
 from sqlalchemy.orm import Session
 
 from .models import (User, BlockedUser, LoginSession, Project, Note, Attachment, Event,
-                     ChatMessage, ChatRead)
+                     ChatMessage, ChatRead, TeamGroup, GroupMember, NoteEdit, ProjectArchive)
 
 MAX_PAGE = 200
 
@@ -74,6 +74,15 @@ def install_collab_routes(app, authenticated):
             ChatMessage.room == "dm", ChatMessage.sender_id == peer, ChatMessage.recipient_id == uid,
             ChatMessage.id > last_read(db, uid, f"dm:{peer}"))) or 0
 
+    def unread_group(db, uid, gid):
+        return db.scalar(select(func.count(ChatMessage.id)).where(
+            ChatMessage.room == f"g{gid}", ChatMessage.id > last_read(db, uid, f"g:{gid}"),
+            or_(ChatMessage.sender_id != uid, ChatMessage.sender_id.is_(None)))) or 0
+
+    def member_group_or_404(db, gid, me):
+        if not db.get(TeamGroup, gid) or not db.get(GroupMember, (gid, me.id)):
+            raise HTTPException(404, "Group not found")
+
     def serialize(m, uid):
         return {"id": m.id, "sender": m.sender_name, "mine": m.sender_id == uid, "body": m.body, "created": m.created}
 
@@ -84,7 +93,9 @@ def install_collab_routes(app, authenticated):
             uid = me_row(db, user).id
             board = "-".join(str(x) for x in (
                 max_id(db, Project.id), max_id(db, Note.id), max_id(db, Attachment.id),
-                db.scalar(select(func.count(Project.id))) or 0, db.scalar(select(func.count(Attachment.id))) or 0))
+                db.scalar(select(func.count(Project.id))) or 0, db.scalar(select(func.count(Attachment.id))) or 0,
+                db.scalar(select(func.count(Note.id))) or 0, db.scalar(select(func.max(NoteEdit.edited_at))) or "",
+                db.scalar(select(func.count(ProjectArchive.project_id))) or 0))
             dm_unread = db.scalar(select(func.count(ChatMessage.id)).where(
                 ChatMessage.room == "dm", ChatMessage.recipient_id == uid)) or 0
             return {"board": board, "events": max_id(db, Event.id),
@@ -103,7 +114,12 @@ def install_collab_routes(app, authenticated):
                     continue
                 out.append({"id": u.id, "username": u.username, "role": u.role, "online": u.id in online,
                             "unread": unread_dm(db, me.id, u.id)})
-            return {"main_unread": unread_main(db, me.id), "people": out}
+            groups = []
+            for g in db.scalars(select(TeamGroup).join(GroupMember, GroupMember.group_id == TeamGroup.id)
+                                .where(GroupMember.user_id == me.id).order_by(TeamGroup.name)):
+                n = db.scalar(select(func.count(GroupMember.user_id)).where(GroupMember.group_id == g.id)) or 0
+                groups.append({"id": g.id, "name": g.name, "members": n, "unread": unread_group(db, me.id, g.id)})
+            return {"main_unread": unread_main(db, me.id), "people": out, "groups": groups}
 
     @app.get("/api/chat/main")
     def main_messages(after: int = Query(0, ge=0), user=Depends(authenticated)):
@@ -126,6 +142,32 @@ def install_collab_routes(app, authenticated):
             db.add(m)
             db.flush()
             mark_read(db, me.id, "main", m.id)
+            db.commit()
+            return serialize(m, me.id)
+
+    @app.get("/api/chat/group/{gid}")
+    def group_messages(gid: int, after: int = Query(0, ge=0), user=Depends(authenticated)):
+        with Session(engine) as db:
+            me = me_row(db, user)
+            member_group_or_404(db, gid, me)
+            q = select(ChatMessage).where(ChatMessage.room == f"g{gid}", ChatMessage.id > after)
+            rows = list(db.scalars(q.order_by(ChatMessage.id.desc()).limit(MAX_PAGE)))[::-1]
+            if rows:
+                mark_read(db, me.id, f"g:{gid}", rows[-1].id)
+                db.commit()
+            return [serialize(m, me.id) for m in rows]
+
+    @app.post("/api/chat/group/{gid}", status_code=201)
+    def post_group(gid: int, data: ChatInput, user=Depends(authenticated)):
+        with Session(engine) as db:
+            me = me_row(db, user)
+            member_group_or_404(db, gid, me)
+            throttle(me.id)
+            m = ChatMessage(room=f"g{gid}", sender_id=me.id, sender_name=me.username, body=data.body,
+                            created=datetime.now(timezone.utc).isoformat())
+            db.add(m)
+            db.flush()
+            mark_read(db, me.id, f"g:{gid}", m.id)
             db.commit()
             return serialize(m, me.id)
 
