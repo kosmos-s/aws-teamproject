@@ -7,7 +7,7 @@ let messageTimer = null;
 const message = text => {
   const el = $('message'); clearTimeout(messageTimer);
   el.textContent = text; el.classList.toggle('show', !!text);
-  if (text) messageTimer = setTimeout(() => { el.classList.remove('show'); setTimeout(() => { if (!el.classList.contains('show')) el.textContent = ''; }, 400); }, Math.min(12000, 4000 + text.length * 60));
+  if (text) messageTimer = setTimeout(() => { el.classList.remove('show'); setTimeout(() => { if (!el.classList.contains('show')) el.textContent = ''; }, 400); }, 30000);  // stays 30 s (user request)
 };
 async function api(path, options = {}) {
   options.headers = { ...options.headers, 'X-CSRF-Token': csrf };
@@ -331,6 +331,7 @@ async function livePoll() {
   live.busy = true;
   try {
     const now = await api('/api/changes');
+    if (typeof renderTyping === 'function') renderTyping(now.typing || []);
     const prev = live.last; live.last = now; live.failures = 0;
     if (prev) {
       if (now.board !== prev.board || now.events !== prev.events || Date.now() - live.lastFull > 60000) { live.lastFull = Date.now(); await refresh(); }

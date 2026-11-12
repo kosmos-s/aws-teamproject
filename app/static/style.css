@@ -141,3 +141,22 @@ a.button-link.secondary{background:var(--secondary);color:var(--text-btn)}
 .chat-layout{align-items:start}
 #chat-rooms{max-height:min(62vh,560px)}
 @media(max-width:760px){.chat-log{height:55vh}#chat-rooms{max-height:180px}}
+/* Discord-style chat details */
+.chat-main{position:relative}
+.chat-form textarea{resize:none;min-height:46px;max-height:140px;line-height:1.45;padding:12px;overflow-y:auto}
+.chat-form{align-items:end}
+.mention-pop{position:absolute;left:12px;right:12px;bottom:64px;max-height:300px;overflow:auto;background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 30px var(--shadow-color);z-index:40;padding:6px}
+.mention-head{font-size:11px;letter-spacing:1px;color:var(--muted);margin:4px 8px 6px}
+.mention-item{display:flex;align-items:center;gap:10px;width:100%;background:none;color:var(--text);padding:6px 8px;border-radius:8px;text-align:left;font-weight:600}
+.mention-item small{color:var(--muted);font-weight:500;margin-left:auto}.mention-item.active,.mention-item:hover{background:var(--active);color:var(--active-text)}
+.mention-item .avatar{width:26px;height:26px;font-size:11px}
+.typing-line{min-height:18px;font-size:12px;color:var(--muted);padding:2px 14px;font-style:italic}
+.jump-latest{position:absolute;right:18px;bottom:110px;z-index:20;border-radius:999px;padding:7px 14px;box-shadow:0 6px 18px var(--shadow-color)}
+.new-divider{display:flex;align-items:center;gap:8px;color:var(--badge);font-size:11px;font-weight:700;margin:6px 0}
+.new-divider::before,.new-divider::after{content:"";flex:1;height:1px;background:var(--badge)}
+.drop-overlay{position:absolute;inset:48px 8px 70px;display:flex;align-items:center;justify-content:center;border:2px dashed var(--accent);border-radius:12px;background:rgba(80,120,255,.12);color:var(--accent);font-weight:700;z-index:35;pointer-events:none}
+/* hover toolbar at the top-right of a message (Discord) */
+.msg-tools{position:absolute;top:-14px;right:6px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:2px;box-shadow:0 4px 12px var(--shadow-color);margin-top:0;z-index:5}
+.msg.mine .msg-tools{right:auto;left:6px}
+.msg-tools button{background:none;color:var(--text-2);padding:4px 8px}.msg-tools button:hover{background:var(--hover);color:var(--text)}
+.msg p{white-space:pre-wrap}

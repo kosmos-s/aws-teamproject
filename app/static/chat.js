@@ -170,7 +170,9 @@ function chatAppend(messages) {
     }
     chat.lastId = m.id;
   }
+  if (messages.length) { const senders = new Set(messages.map(m => m.sender)); typingNow = typingNow.filter(t => !senders.has(t.name)); renderTyping(); }
   if (nearBottom || messages.some(m => m.mine)) log.scrollTop = log.scrollHeight;
+  else if (messages.some(m => !m.mine) && !chat.initial) $('jump-latest').hidden = false;
 }
 
 async function react(id, emoji) {
@@ -219,6 +221,23 @@ async function loadPin() {
     $('pin-clear').hidden = chat.room === 'main' && currentUser?.role !== 'admin';
     $('pin-clear').onclick = async () => { try { await api(`/api/chat/pin/${pin.message_id}`, {method:'DELETE'}); await loadPin(); } catch (error) { message(error.message); } };
   } catch { bar.hidden = true; }
+}
+function markNewDivider(count) {
+  if (!count) return;
+  const log = $('chat-log'); const msgs = [...log.querySelectorAll('.msg:not(.mine):not(.local)')];
+  const first = msgs[Math.max(0, msgs.length - count)]; if (!first) return;
+  const line = document.createElement('div'); line.className = 'new-divider'; line.textContent = '새 메시지';
+  first.before(line); line.scrollIntoView({block:'center'});
+}
+// "OO님이 입력 중…" (data comes with /api/changes)
+let typingNow = [];
+function renderTyping(list) {
+  if (list) typingNow = list.map(t => ({...t, until: Date.now() + 6000}));
+  typingNow = typingNow.filter(t => t.until > Date.now());
+  const names = typingNow.filter(t => t.room === chat.room).map(t => displayName(t.name));
+  const el = $('typing-line'); if (!el) return;
+  el.textContent = !names.length ? '' : names.length === 1 ? `${names[0]}님이 입력 중…` : names.length === 2 ? `${names[0]}님, ${names[1]}님이 입력 중…` : `${names.length}명이 입력 중…`;
+  clearTimeout(renderTyping.t); if (names.length) renderTyping.t = setTimeout(() => renderTyping(), 1500);
 }
 async function loadProfiles() { try { profiles = await api('/api/profiles'); } catch { /* optional */ } }
 async function chatReload() {
@@ -272,8 +291,12 @@ function chatTitle() {
 }
 
 async function chatOpen(key) {
+  const unreadBefore = (chat.rooms && chat.rooms[key]?.unread) || 0;
   chat.room = key; chat.lastId = 0; chat.lastDay = ''; chat.lastSender = null; chat.initial = true; setReply(null); $('chat-log').replaceChildren(); $('chat-title').textContent = chatTitle();
-  try { await chatLoad(); await chatPeople(); await loadPin(); $('chat-form').elements.body.focus(); }
+  renderTyping();
+  try {
+    await chatLoad(); markNewDivider(unreadBefore); await chatPeople(); await loadPin(); $('chat-form').elements.body.focus();
+  }
   catch (error) {
     message(error.message);
     if (key !== 'main') { chat.room = 'main'; chat.lastId = 0; $('chat-log').replaceChildren(); $('chat-title').textContent = chatTitle(); }
@@ -351,6 +374,106 @@ window.addEventListener('DOMContentLoaded', () => {
     queueLocal(caption, f);
   });
   $('reply-cancel').addEventListener('click', () => setReply(null));
+  // ---------- Discord-style composer ----------
+  const box = $('chat-form').elements.body;
+  const grow = () => { box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 140) + 'px'; };
+  box.addEventListener('input', () => { grow(); mentionUpdate(); sendTyping(); });
+  // Enter sends, Shift+Enter new line; never send while Korean IME is composing
+  box.addEventListener('keydown', e => {
+    if (mentionKey(e)) return;
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); $('chat-form').requestSubmit(); setTimeout(grow, 0); return; }
+    if (e.key === 'Escape') { if (chat.replyTo) setReply(null); return; }
+    if (e.key === 'ArrowUp' && !box.value) {           // edit my last message
+      const mine = [...$('chat-log').querySelectorAll('.msg.mine:not(.local):not(.deleted)')].pop();
+      const btn = mine && [...mine.querySelectorAll('.msg-tools button')].find(b => b.textContent === '수정');
+      if (btn) { e.preventDefault(); btn.click(); }
+    }
+  });
+  // typing signal, at most every 4 s while typing
+  let lastTyping = 0;
+  function sendTyping() {
+    if (!box.value.trim() || Date.now() - lastTyping < 4000) return;
+    lastTyping = Date.now();
+    api('/api/chat/typing', {method:'POST', body:{room: chat.room}}).catch(() => {});
+  }
+  // paste screenshots / files straight into the box
+  box.addEventListener('paste', e => {
+    const files = [...(e.clipboardData?.files || [])];
+    if (!files.length) return;
+    e.preventDefault();
+    for (const f of files.slice(0, 5)) sendFile(f);
+  });
+  // drag & drop onto the chat
+  const main = document.querySelector('.chat-main'), overlay = $('drop-overlay');
+  let dragDepth = 0;
+  main.addEventListener('dragenter', e => { if (e.dataTransfer?.types?.includes('Files')) { dragDepth++; overlay.hidden = false; e.preventDefault(); } });
+  main.addEventListener('dragover', e => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); });
+  main.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) overlay.hidden = true; });
+  main.addEventListener('drop', e => {
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault(); dragDepth = 0; overlay.hidden = true;
+    for (const f of [...e.dataTransfer.files].slice(0, 5)) sendFile(f);
+  });
+  function sendFile(f) {
+    const name = f.name && f.name !== 'image.png' ? f.name : `붙여넣은_이미지_${new Date().toTimeString().slice(0, 8).replace(/:/g, '')}.png`;
+    const file = f.name === name ? f : new File([f], name, {type: f.type || 'image/png'});
+    if (!/\.(png|jpe?g|gif|pdf|txt)$/i.test(file.name)) { message('PNG, JPG, GIF, PDF, TXT 파일만 보낼 수 있습니다.'); return; }
+    if (file.size > 1536 * 1024) { message('파일은 1.5MiB까지 보낼 수 있습니다.'); return; }
+    const caption = box.value.trim(); box.value = ''; grow();
+    queueLocal(caption, file);
+  }
+  // jump to latest
+  const log = $('chat-log');
+  log.addEventListener('scroll', () => { if (log.scrollHeight - log.scrollTop - log.clientHeight < 60) $('jump-latest').hidden = true; });
+  $('jump-latest').addEventListener('click', () => { log.scrollTop = log.scrollHeight; $('jump-latest').hidden = true; });
+
+  // ---------- @mention autocomplete ----------
+  const pop = $('mention-pop'); let mentionState = null;
+  function mentionCandidates(q) {
+    const names = [...new Set([...(chat.peers || []).map(p => p.username)])];
+    q = q.toLowerCase();
+    return names.map(n => ({ n, d: (profiles[n]?.display_name || ''), online: (chat.peers || []).find(p => p.username === n)?.online }))
+      .filter(x => !q || x.n.toLowerCase().includes(q) || x.d.toLowerCase().includes(q))
+      .sort((a, b) => (b.online - a.online) || a.n.localeCompare(b.n)).slice(0, 8);
+  }
+  function mentionUpdate() {
+    const pos = box.selectionStart, before = box.value.slice(0, pos);
+    const m = before.match(/(^|\s)@([^\s@]{0,40})$/);
+    if (!m) { pop.hidden = true; mentionState = null; return; }
+    const list = mentionCandidates(m[2]);
+    if (!list.length) { pop.hidden = true; mentionState = null; return; }
+    mentionState = { start: pos - m[2].length - 1, end: pos, list, index: 0 };
+    drawMentions();
+  }
+  function drawMentions() {
+    pop.replaceChildren();
+    const head = document.createElement('p'); head.className = 'mention-head'; head.textContent = '멤버 — @로 멘션'; pop.append(head);
+    mentionState.list.forEach((x, i) => {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'mention-item' + (i === mentionState.index ? ' active' : ''); b.setAttribute('role', 'option');
+      b.append(avatar(x.n));
+      const t = document.createElement('span'); t.textContent = x.d ? x.d : x.n;
+      const u = document.createElement('small'); u.textContent = '@' + x.n + (x.online ? ' · 접속 중' : '');
+      b.append(t, u);
+      b.addEventListener('mousedown', e => { e.preventDefault(); mentionState.index = i; mentionPick(); });
+      pop.append(b);
+    });
+    pop.hidden = false;
+  }
+  function mentionPick() {
+    const x = mentionState.list[mentionState.index];
+    box.value = box.value.slice(0, mentionState.start) + '@' + x.n + ' ' + box.value.slice(mentionState.end);
+    const caret = mentionState.start + x.n.length + 2;
+    box.setSelectionRange(caret, caret); pop.hidden = true; mentionState = null; box.focus(); grow();
+  }
+  function mentionKey(e) {
+    if (!mentionState || pop.hidden) return false;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = mentionState.list.length; mentionState.index = (mentionState.index + (e.key === 'ArrowDown' ? 1 : n - 1)) % n; drawMentions(); return true; }
+    if ((e.key === 'Enter' || e.key === 'Tab') && !e.isComposing) { e.preventDefault(); mentionPick(); return true; }
+    if (e.key === 'Escape') { e.preventDefault(); pop.hidden = true; mentionState = null; return true; }
+    return false;
+  }
+  box.addEventListener('blur', () => setTimeout(() => { pop.hidden = true; }, 150));
+
   // chat search
   let searchTimer = null;
   $('chat-search').addEventListener('input', () => {

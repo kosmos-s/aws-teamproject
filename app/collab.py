@@ -21,6 +21,10 @@ from .suite import extras_for, extra_fields, purge_messages
 MAX_PAGE = 200
 
 
+class TypingInput(BaseModel):
+    room: str = Field(max_length=20, pattern=r"^(main|g\d{1,9}|u\d{1,9})$")
+
+
 class ChatInput(BaseModel):
     body: str = Field(min_length=1, max_length=2000)
     reply_to: Optional[int] = None
@@ -48,6 +52,57 @@ def install_collab_routes(app, authenticated):
 
     def throttle(user_id, text=""):
         app.state.antispam.check(user_id, text)
+
+    # "OO님이 입력 중…": in-memory, single worker. canonical key -> {user_id: (name, ts)}
+    typing = {}
+    TYPING_TTL = 6
+
+    def canonical_room(db, me, room):
+        if room == "main":
+            return "main"
+        if room.startswith("g"):
+            gid = int(room[1:])
+            if not db.get(GroupMember, (gid, me.id)):
+                raise HTTPException(404, "Group not found")
+            return room
+        peer = int(room[1:])
+        if not db.get(User, peer) or peer == me.id:
+            raise HTTPException(404, "User not found")
+        a, b = sorted([me.id, peer])
+        return f"dm:{a}-{b}"
+
+    def typing_for(db, me):
+        """Active typers in rooms I can see, keyed by MY room key ('main', 'g<id>', 'u<peer>')."""
+        now_t = time.time(); out = []
+        my_groups = None
+        for key, people in list(typing.items()):
+            for uid, (name, ts) in list(people.items()):
+                if now_t - ts > TYPING_TTL:
+                    people.pop(uid, None); continue
+                if uid == me.id:
+                    continue
+                if key == "main":
+                    out.append({"room": "main", "name": name})
+                elif key.startswith("g"):
+                    if my_groups is None:
+                        my_groups = set(db.scalars(select(GroupMember.group_id).where(GroupMember.user_id == me.id)))
+                    if int(key[1:]) in my_groups:
+                        out.append({"room": key, "name": name})
+                else:
+                    a, b = (int(x) for x in key[3:].split("-"))
+                    if me.id in (a, b):
+                        out.append({"room": f"u{uid}", "name": name})
+            if not people:
+                typing.pop(key, None)
+        return out
+
+    @app.post("/api/chat/typing")
+    def chat_typing(data: TypingInput, user=Depends(authenticated)):
+        with Session(engine) as db:
+            me = me_row(db, user)
+            key = canonical_room(db, me, data.room)
+            typing.setdefault(key, {})[me.id] = (me.username, time.time())
+            return {"ok": True}
 
     def max_id(db, column, *where):
         return db.scalar(select(func.max(column)).where(*where)) or 0
@@ -136,7 +191,8 @@ def install_collab_routes(app, authenticated):
             return {"board": board, "events": max_id(db, Event.id),
                     "chat": f"{max_id(db, ChatMessage.id)}|{dm_unread}|{db.scalar(select(func.max(ChatEdit.edited_at))) or ''}|{db.scalar(select(func.sum(ChatRead.last_id))) or 0}|{db.scalar(select(func.count(ChatReaction.emoji))) or 0}|{db.scalar(select(func.max(ChatPin.pinned_at))) or ''}-{db.scalar(select(func.count(ChatPin.room_key))) or 0}",
                     "access": f"{db.scalar(select(func.count(ProjectAccess.project_id))) or 0}-{db.scalar(select(func.count(GroupMember.user_id))) or 0}",
-                    "users": f"{db.scalar(select(func.count(User.id))) or 0}|{db.scalar(select(func.max(Profile.updated))) or ''}"}
+                    "users": f"{db.scalar(select(func.count(User.id))) or 0}|{db.scalar(select(func.max(Profile.updated))) or ''}",
+                    "typing": typing_for(db, me_row(db, user))}
 
     @app.get("/api/chat/people")
     def people(user=Depends(authenticated)):

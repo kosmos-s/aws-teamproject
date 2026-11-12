@@ -109,6 +109,21 @@ class CollabTests(unittest.TestCase):
                 ben.post("/api/chat/main/0/files", files={"file": (f"f{i}.txt", b"x", "text/plain")})
             self.assertEqual(ben.post("/api/chat/main/0/files", files={"file": ("z.txt", b"x", "text/plain")}).status_code, 429)
 
+    def test_typing_indicator_scoped_to_room_members(self):
+        from unittest import mock
+        import app.collab as collab
+        amy, ben, gus = self.client("amy"), self.client("ben"), self.client("gus")
+        self.assertEqual(amy.post("/api/chat/typing", json={"room": "main"}).status_code, 200)
+        self.assertIn({"room": "main", "name": "amy"}, ben.get("/api/changes").json()["typing"])
+        self.assertEqual(amy.get("/api/changes").json()["typing"], [])           # not shown to myself
+        amy.post("/api/chat/typing", json={"room": f"u{self.uid('ben')}"})
+        self.assertIn({"room": f"u{self.uid('amy')}", "name": "amy"}, ben.get("/api/changes").json()["typing"])
+        self.assertNotIn("u", [t["room"][0] for t in gus.get("/api/changes").json()["typing"]])  # others' 1:1 hidden
+        self.assertEqual(amy.post("/api/chat/typing", json={"room": "g99"}).status_code, 404)
+        self.assertEqual(amy.post("/api/chat/typing", json={"room": "x; drop"}).status_code, 422)
+        with mock.patch("app.collab.time.time", return_value=collab.time.time() + 10):
+            self.assertEqual(ben.get("/api/changes").json()["typing"], [])       # expires after 6 s
+
     def test_blocked_user_hidden_and_cannot_receive_dm(self):
         boss, amy = self.client("boss"), self.client("amy")
         boss.patch(f"/api/admin/users/{self.uid('ben')}", json={"active": False, "role": "member"})

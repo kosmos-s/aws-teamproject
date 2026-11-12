@@ -80,7 +80,7 @@ def create_app(settings=None):
     replaced = {}  # token_hash -> time it was ended by a newer login of the same account
     last_active = {}  # token_hash -> last user-initiated request (background polling does not count)
     IDLE_LIMIT = settings_idle_seconds()
-    BACKGROUND = {"/api/wait", "/api/changes", "/api/status", "/api/events", "/api/chat/people"}
+    BACKGROUND = {"/api/wait", "/api/changes", "/api/status", "/api/events", "/api/chat/people", "/api/chat/typing"}
     FORCED_OK = {"/api/session", "/api/logout", "/api/account/password"}
     dummy_hash = password_hash("unmatched-dummy-password")
 
