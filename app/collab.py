@@ -43,13 +43,11 @@ def install_collab_routes(app, authenticated):
             raise HTTPException(401, "Login required")
         return row
 
-    def throttle(user_id):
-        # 20 messages per 10 seconds per user is plenty for people, stops runaway scripts.
-        now = time.time()
-        recent = [t for t in recent_posts.get(user_id, []) if now - t < 10]
-        if len(recent) >= 20:
-            raise HTTPException(429, "Too many messages")
-        recent_posts[user_id] = recent + [now]
+    from .antispam import AntiSpam
+    app.state.antispam = getattr(app.state, "antispam", None) or AntiSpam()
+
+    def throttle(user_id, text=""):
+        app.state.antispam.check(user_id, text)
 
     def max_id(db, column, *where):
         return db.scalar(select(func.max(column)).where(*where)) or 0
@@ -179,7 +177,7 @@ def install_collab_routes(app, authenticated):
     def post_main(data: ChatInput, user=Depends(authenticated)):
         with Session(engine) as db:
             me = me_row(db, user)
-            throttle(me.id)
+            throttle(me.id, data.body)
             m = ChatMessage(room="main", sender_id=me.id, sender_name=me.username, body=data.body,
                             created=datetime.now(timezone.utc).isoformat())
             db.add(m)
@@ -210,7 +208,7 @@ def install_collab_routes(app, authenticated):
         with Session(engine) as db:
             me = me_row(db, user)
             member_group_or_404(db, gid, me)
-            throttle(me.id)
+            throttle(me.id, data.body)
             m = ChatMessage(room=f"g{gid}", sender_id=me.id, sender_name=me.username, body=data.body,
                             created=datetime.now(timezone.utc).isoformat())
             db.add(m)
@@ -248,7 +246,7 @@ def install_collab_routes(app, authenticated):
             peer = peer_or_404(db, peer_id, me)
             if db.get(BlockedUser, peer.id):
                 raise HTTPException(409, "Recipient is blocked")
-            throttle(me.id)
+            throttle(me.id, data.body)
             m = ChatMessage(room="dm", sender_id=me.id, sender_name=me.username, recipient_id=peer.id,
                             body=data.body, created=datetime.now(timezone.utc).isoformat())
             db.add(m)

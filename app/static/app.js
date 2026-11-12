@@ -29,7 +29,9 @@ async function api(path, options = {}) {
       if (wasIn) message(text);  // background requests swallow errors, so show it here
       throw new Error(text);
     }
-    throw new Error(ERRORS[detail] || STATUS_ERRORS[response.status] || `요청을 처리하지 못했습니다 (${response.status}).`);
+    const retry = Number(response.headers.get('Retry-After') || 0);
+    const err = new Error((ERRORS[detail] || STATUS_ERRORS[response.status] || `요청을 처리하지 못했습니다 (${response.status}).`) + (retry ? ` ${retry}초 후 다시 보내세요.` : ''));
+    err.retryAfter = retry; err.detail = detail; throw err;
   }
   if (data === null) throw new Error('서버 응답을 읽지 못했습니다. 잠시 후 다시 시도하세요.');
   return data;
@@ -80,7 +82,8 @@ const ERRORS = {
   'Maximum 1.5 MiB': '파일은 1.5MiB까지 보낼 수 있습니다.',
   'Allowed: png, jpg': 'PNG, JPG 사진만 올릴 수 있습니다.',
   'Maximum 512 KiB': '사진은 512KB까지 올릴 수 있습니다.',
-  'Too many messages': '메시지를 너무 빨리 보내고 있습니다. 잠시 후 다시 보내세요.',
+  'Too many messages': '메시지를 너무 빨리 보내고 있습니다(도배 방지).',
+  'Duplicate message': '같은 메시지를 짧은 시간에 너무 여러 번 보냈습니다(도배 방지).',
   'User not found': '계정을 찾을 수 없습니다. 새로고침하세요.',
   'Project not found': '프로젝트를 찾을 수 없습니다. 새로고침하세요.',
   'File not found': '파일을 찾을 수 없습니다.',

@@ -222,12 +222,33 @@ async function loadPin() {
 }
 async function loadProfiles() { try { profiles = await api('/api/profiles'); } catch { /* optional */ } }
 async function chatReload() {
-  const log = $('chat-log'); const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80; const top = log.scrollTop;
+  if (chat.loading) { chat.again = true; return; }
+  const log = $('chat-log'); const room = chat.room;
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80; const top = log.scrollTop;
+  chat.loading = true;
+  let rows;
+  try { rows = await api(`${chatRoomPath()}?after=0`); }
+  finally { chat.loading = false; }
+  if (room !== chat.room) return;
   const locals = [...log.querySelectorAll('.msg.local')];
-  chat.lastId = 0; chat.lastDay = ''; chat.lastSender = null; log.replaceChildren(); await chatLoad();
+  chat.initial = true;   // a reload never re-fires mention alarms
+  chat.lastId = 0; chat.lastDay = ''; chat.lastSender = null;
+  log.replaceChildren(); chatAppend(rows);                 // swap synchronously: the box never shows empty
+  chat.initial = false;
   for (const node of locals) if (node.dataset.room === chat.room) log.append(node);
-  await loadPin();
   log.scrollTop = atBottom ? log.scrollHeight : top;
+  loadPin();
+  if (chat.again) { chat.again = false; await chatLoad(); }
+}
+// Flood protection feedback: lock the send button with a countdown.
+function chatCooldown(seconds) {
+  const form = $('chat-form'), button = form.querySelector('button:last-of-type'), input = form.elements.body;
+  clearInterval(chatCooldown.timer); let left = seconds;
+  const tick = () => {
+    if (left <= 0) { clearInterval(chatCooldown.timer); button.disabled = false; button.textContent = '보내기'; input.placeholder = '메시지 입력 후 Enter · @아이디로 멘션'; return; }
+    button.disabled = true; button.textContent = `${left}초`; input.placeholder = `도배 방지: ${left}초 후 보낼 수 있습니다`; left -= 1;
+  };
+  tick(); chatCooldown.timer = setInterval(tick, 1000);
 }
 // Always fetch in server order from the last id we have. If another change arrives while a
 // fetch is running, remember it and fetch again, so simultaneous messages are never skipped.
@@ -284,7 +305,8 @@ window.addEventListener('DOMContentLoaded', () => {
         node.remove(); await chatLoad();
       } catch (error) {
         node.classList.remove('sending'); node.classList.add('failed');
-        node.querySelector('small').textContent = '나 · 전송 실패';
+        node.querySelector('small').textContent = error.retryAfter ? `나 · 전송 안 됨 (도배 방지)` : '나 · 전송 실패';
+        if (error.retryAfter) chatCooldown(error.retryAfter);
         const actions = document.createElement('span'); actions.className = 'local-actions';
         const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '재전송';
         const drop = document.createElement('button'); drop.type = 'button'; drop.textContent = '삭제';

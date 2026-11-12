@@ -165,6 +165,7 @@ def install_suite_routes(app, authenticated, admin):
             raise HTTPException(413, "Maximum 1.5 MiB")
         with Session(engine) as db:
             me = me_row(db, user)
+            app.state.antispam.check(me.id, (body or '') + ' ' + name)
             if kind == "main":
                 room, recipient, read_key = "main", None, "main"
             elif kind == "group":

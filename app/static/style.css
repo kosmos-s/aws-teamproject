@@ -135,3 +135,9 @@ a.button-link.secondary{background:var(--secondary);color:var(--text-btn)}
 .secret-key{display:inline-block;font-size:18px;letter-spacing:1px;background:var(--sunken);border:1px dashed var(--border);border-radius:8px;padding:10px 14px;margin:6px 0 12px;user-select:all}
 .ok-text{color:var(--ok)}.small-note{font-size:12px;margin-top:-8px}
 @media(max-width:760px){.kanban{grid-template-columns:1fr}.task-form{grid-template-columns:1fr}}
+/* steady chat box: fixed height so sending/reloading never resizes it */
+.chat-main{min-height:0}
+.chat-log{flex:none;height:min(62vh,560px);max-height:none;min-height:0;overflow-y:auto;overflow-anchor:none}
+.chat-layout{align-items:start}
+#chat-rooms{max-height:min(62vh,560px)}
+@media(max-width:760px){.chat-log{height:55vh}#chat-rooms{max-height:180px}}
