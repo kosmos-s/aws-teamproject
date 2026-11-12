@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Float
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, Float, Index
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -231,3 +231,72 @@ class UserTotp(Base):
     secret = Column(String(64), nullable=False)
     enabled = Column(Integer, nullable=False, default=0)
     created = Column(String(40), nullable=False)
+
+
+class ProjectPolicy(Base):
+    __tablename__ = "project_policies"
+    project_id = Column(Integer, primary_key=True)
+    restricted = Column(Integer, nullable=False, default=1)
+
+
+class SessionActivity(Base):
+    __tablename__ = "session_activity"
+    token_hash = Column(String(64), primary_key=True)
+    last_active = Column(Float, nullable=False)
+
+
+class TotpVault(Base):
+    __tablename__ = "totp_vault"
+    user_id = Column(Integer, primary_key=True)
+    encrypted = Column(Text, nullable=False)
+
+
+class RecoveryCode(Base):
+    __tablename__ = "recovery_codes"
+    user_id = Column(Integer, primary_key=True)
+    code_hash = Column(String(64), primary_key=True)
+
+
+class UserPreference(Base):
+    __tablename__ = "user_preferences"
+    user_id = Column(Integer, primary_key=True)
+    notify = Column(String(12), nullable=False, default="all")
+    sound = Column(Integer, nullable=False, default=1)
+
+
+class ObjectDeletion(Base):
+    __tablename__ = "object_deletions"
+    key = Column(String(100), primary_key=True)
+    created = Column(Float, nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+
+
+class UploadRecord(Base):
+    __tablename__ = "upload_records"
+    key = Column(String(100), primary_key=True)
+    username = Column(String(80), nullable=False, index=True)
+    scope = Column(String(40), nullable=False, index=True)
+    size = Column(Integer, nullable=False)
+    created = Column(Float, nullable=False)
+
+
+class ChangeNotice(Base):
+    __tablename__ = "change_notices"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, nullable=True, index=True)
+    kind = Column(String(30), nullable=False)
+    title = Column(String(160), nullable=False)
+    body = Column(String(2000), nullable=False, default="")
+    actor = Column(String(80), nullable=False)
+    admin_only = Column(Integer, nullable=False, default=0)
+    created = Column(String(40), nullable=False)
+
+
+class NoticeRead(Base):
+    __tablename__ = "notice_reads"
+    user_id = Column(Integer, primary_key=True)
+    last_id = Column(Integer, nullable=False, default=0)
+
+
+Index('ix_chat_room_id', ChatMessage.room, ChatMessage.id)
+Index('ix_chat_dm_recipient_sender_id', ChatMessage.recipient_id, ChatMessage.sender_id, ChatMessage.id)

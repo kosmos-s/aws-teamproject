@@ -49,6 +49,7 @@ function toast(title, body, key) {
 function chatAlarm(rooms) {
   // rooms: key -> {label, unread}. Compare with the previous snapshot; the first load never alarms.
   const prev = chat.rooms; chat.rooms = rooms;
+  if (notificationPrefs.notify !== 'all') return;
   if (!prev) return;
   const viewingChat = document.querySelector('.view.active')?.dataset.view === 'chat' && !document.hidden;
   let fired = false;
@@ -59,11 +60,11 @@ function chatAlarm(rooms) {
       fired = true;
     }
   }
-  if (fired && alarmSetting('sound', true)) beep();
+  if (fired && notificationPrefs.sound && alarmSetting('sound', true)) beep();
 }
 function notifyNew(total) {
   try {
-    if (total > chat.lastTotal && document.hidden && 'Notification' in window && Notification.permission === 'granted' && localStorage.getItem('kosmos-notify') === 'on')
+    if (notificationPrefs.notify === 'all' && total > chat.lastTotal && document.hidden && 'Notification' in window && Notification.permission === 'granted' && localStorage.getItem('kosmos-notify') === 'on')
       new Notification('KOSMOS 새 메시지', { body: `읽지 않은 메시지 ${total}개`, tag: 'kosmos-chat' });
   } catch { /* notifications are optional */ }
   chat.lastTotal = total;
@@ -96,8 +97,13 @@ async function chatPeople() {
   for (const g of chat.groups) rooms['g' + g.id] = { label: '# ' + g.name, unread: g.unread };
   for (const p of data.people) rooms['u' + p.id] = { label: `${p.username}님의 1:1 메시지`, unread: p.unread };
   chatAlarm(rooms);
-  const total = (chat.room === 'main' ? 0 : data.main_unread) + chat.groups.reduce((n, g) => n + (chat.room === 'g' + g.id ? 0 : g.unread), 0)
-    + data.people.reduce((n, p) => n + (chat.room === 'u' + p.id ? 0 : p.unread), 0);
+  const mentions = data.mention_unread || 0;
+  if (chat.lastMentions != null && mentions > chat.lastMentions && notificationPrefs.notify === 'mentions') {
+    if (alarmSetting('popup',true)) toast('@멘션', `미확인 멘션 ${mentions}개`, chat.room);
+    if (notificationPrefs.sound && alarmSetting('sound',true)) beep();
+  }
+  chat.lastMentions=mentions;
+  const total = data.main_unread + chat.groups.reduce((n,g)=>n+g.unread,0) + data.people.reduce((n,p)=>n+p.unread,0);
   showUnread(total);
   if (typeof renderMyInfo === 'function') renderMyInfo();
 }
@@ -166,7 +172,7 @@ function chatAppend(messages) {
     // @mention alarm (not on first load, not for my own messages, not while looking at this room)
     if (!chat.initial && !m.mine && mentionsMe(m.body)) {
       const viewing = document.querySelector('.view.active')?.dataset.view === 'chat' && !document.hidden;
-      if (!viewing) { if (alarmSetting('popup', true)) toast(`@멘션 · ${displayName(m.sender)}`, (m.body || '').slice(0, 60), chat.room); if (alarmSetting('sound', true)) beep(); }
+      if (!viewing && notificationPrefs.notify !== 'off') { if (alarmSetting('popup', true)) toast(`@멘션 · ${displayName(m.sender)}`, (m.body || '').slice(0, 60), chat.room); if (notificationPrefs.sound && alarmSetting('sound', true)) beep(); }
     }
     chat.lastId = m.id;
   }
@@ -242,11 +248,15 @@ function renderTyping(list) {
 async function loadProfiles() { try { profiles = await api('/api/profiles'); } catch { /* optional */ } }
 async function chatReload() {
   if (chat.loading) { chat.again = true; return; }
+  // A receipt/edit refresh must not jump over messages beyond our previous cursor.
+  if (chat.lastId > 0) await chatLoad();
+  if (chat.loading) { chat.again = true; return; }
   const log = $('chat-log'); const room = chat.room;
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80; const top = log.scrollTop;
   chat.loading = true;
   let rows;
-  try { rows = await api(`${chatRoomPath()}?after=0`); }
+  const known = chat.lastId;
+  try { rows = await api(`${chatRoomPath()}?after=0&read=false${known ? `&before=${known + 1}` : ''}`); }
   finally { chat.loading = false; }
   if (room !== chat.room) return;
   const locals = [...log.querySelectorAll('.msg.local')];
@@ -278,9 +288,15 @@ async function chatLoad() {
     do {
       chat.again = false;
       const room = chat.room;
-      const rows = await api(`${chatRoomPath()}?after=${chat.lastId}`);
+      const after = chat.lastId;
+      const reading = !document.hidden && document.querySelector('.view.active')?.dataset.view === 'chat';
+      const rows = await api(`${chatRoomPath()}?after=${after}&read=${reading}`);
+      if (room === chat.room && after > 0 && rows.length === 200) chat.again = true;
       if (room === chat.room) chatAppend(rows);
     } while (chat.again);
+    if (chat.lastId > 0 && !document.hidden && document.querySelector('.view.active')?.dataset.view === 'chat') {
+      await api('/api/chat/read', {method:'POST',body:{room:chat.room,last_id:chat.lastId}});
+    }
   } finally { chat.loading = false; chat.initial = false; }
 }
 
@@ -310,7 +326,7 @@ async function chatTick(reload = false) {
   await chatPeople();
 }
 async function chatStart() { chat.started = true; chat.room = 'main'; chat.lastId = 0; chat.lastDay = ''; chat.lastSender = null; chat.initial = true; $('chat-log').replaceChildren(); $('chat-title').textContent = '# 전체 채팅'; await loadProfiles(); await chatTick(); await loadPin(); }
-function chatReset() { chat.rooms = null; chat.started = false; chat.lastId = 0; chat.room = 'main'; chat.groups = []; $('chat-log')?.replaceChildren(); $('chat-rooms')?.replaceChildren(); showUnread(0); document.title = BASE_TITLE; }
+function chatReset() { chat.rooms = null; chat.lastMentions = null; chat.started = false; chat.lastId = 0; chat.room = 'main'; chat.groups = []; $('chat-log')?.replaceChildren(); $('chat-rooms')?.replaceChildren(); showUnread(0); document.title = BASE_TITLE; }
 
 window.addEventListener('DOMContentLoaded', () => {
   // KakaoTalk-style sending: a local bubble appears at once ("전송 중"), is replaced by the server copy

@@ -98,9 +98,11 @@ class ExtrasTests(unittest.TestCase):
         self.assertEqual(amy.get("/api/notes").json()[0]["body"], "비밀 메모")
         self.assertEqual(amy.get(f"/api/attachments/{fid}").status_code, 200)
         self.assertEqual(next(p for p in boss.get("/api/projects").json() if p["id"] == pid)["access_groups"], ["디자인팀"])
-        # clearing access or deleting the group makes it visible again
+        # Deleting the final group keeps the project restricted until explicitly published.
         boss.put(f"/api/admin/projects/{pid}/access", json={"group_ids": [gid]})
         self.assertEqual(boss.delete(f"/api/admin/groups/{gid}").status_code, 200)
+        self.assertNotIn(pid, [p["id"] for p in ben.get("/api/projects").json()])
+        boss.put(f"/api/admin/projects/{pid}/access", json={"group_ids": [], "restricted": False})
         self.assertIn(pid, [p["id"] for p in ben.get("/api/projects").json()])
 
     def test_audit_log_admin_only_and_events_filtered(self):

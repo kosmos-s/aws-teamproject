@@ -31,7 +31,7 @@ async function api(path, options = {}) {
     }
     const retry = Number(response.headers.get('Retry-After') || 0);
     const err = new Error((ERRORS[detail] || STATUS_ERRORS[response.status] || `요청을 처리하지 못했습니다 (${response.status}).`) + (retry ? ` ${retry}초 후 다시 보내세요.` : ''));
-    err.retryAfter = retry; err.detail = detail; throw err;
+    err.retryAfter = retry; err.detail = detail; const ref = response.headers.get('X-Request-ID'); if (ref && response.status >= 500) err.message += ` 문의 번호: ${ref}`; throw err;
   }
   if (data === null) throw new Error('서버 응답을 읽지 못했습니다. 잠시 후 다시 시도하세요.');
   return data;
@@ -75,7 +75,9 @@ const ERRORS = {
   'Two-factor already enabled': '2단계 인증이 이미 켜져 있습니다.',
   'Two-factor not enabled': '2단계 인증이 꺼져 있습니다.',
   'Start two-factor setup first': '먼저 2단계 인증 설정을 시작하세요.',
-  'Session idle': '30분 동안 사용하지 않아 자동으로 로그아웃되었습니다. 다시 로그인하세요.',
+  'Session idle': '일정 시간 사용하지 않아 자동으로 로그아웃되었습니다. 다시 로그인하세요.',
+  'Too many verification attempts': '인증 시도가 많아 잠시 제한했습니다.',
+  'Storage quota exceeded': '저장 용량 한도에 도달했습니다. 불필요한 파일을 정리하세요.',
   'Task not found': '할 일을 찾을 수 없습니다. 새로고침하세요.',
   'Only the creator or an administrator': '만든 사람이나 관리자만 삭제할 수 있습니다.',
   'Allowed: png, jpg, gif, pdf, txt': 'PNG, JPG, GIF, PDF, TXT 파일만 보낼 수 있습니다.',
@@ -105,7 +107,10 @@ function applySession(session) {
   $('logout').hidden = false;
 }
 function showLogin() {
-  currentUser = null; $('login').hidden = false; $('dashboard').hidden = true; $('force-password').hidden = true; $('logout').hidden = true;
+  $('totp-secret').textContent = ''; $('totp-setup').hidden = true;
+  $('totp-enable-form').reset(); $('totp-disable-form').reset();
+  if ($('reauth-password')) $('reauth-password').value = '';
+  if ($('recovery-codes')) $('recovery-codes').textContent = ''; if ($('recovery-box')) $('recovery-box').hidden = true; currentUser = null; $('login').hidden = false; $('dashboard').hidden = true; $('force-password').hidden = true; $('logout').hidden = true;
   $('identity').textContent = '팀 개발환경 운영 포털'; csrf = ''; live.last = null; document.title = 'KOSMOS · 운영 포털';
   if (typeof chatReset === 'function') chatReset();
 }
@@ -115,7 +120,7 @@ async function enter(session) {
   if (session.must_change) { $('dashboard').hidden = true; $('force-password').hidden = false; return; }
   $('force-password').hidden = true; $('dashboard').hidden = false;
   showView(location.hash.slice(1) || 'home', false);
-  await refresh(); await chatStart();
+  await refreshPreferences(); await refresh(); await refreshNotices(); await chatStart();
   liveLoop(); dueAlert(); idleWatch();
 }
 const VIEWS = ['home','chat','projects','tasks','notes','files','history','account','guide','members','groups','orca','audit','operations','server'];
@@ -127,8 +132,10 @@ function showView(name, push = true) {
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === name));
   if (push && location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
   if (name === 'audit' && typeof refreshAudit === 'function') refreshAudit().catch(e => message(e.message));
+  if (name === 'home' && typeof refreshNotices === 'function') refreshNotices().catch(e=>message(e.message));
   if (name === 'tasks') refreshTasks().catch(e => message(e.message));
-  if (name === 'account') refreshAccount().catch(e => message(e.message));
+  if (name === 'account') { refreshAccount().catch(e => message(e.message)); refreshPreferences().catch(e => message(e.message)); }
+  if (name === 'chat' && chat.started) chatLoad().then(chatPeople).catch(e => message(e.message));
 }
 function record(title, body, meta) {
   const node = document.createElement('article'); node.className = 'record';
@@ -183,6 +190,8 @@ async function refresh() {
   }
   const projectNode = (p) => {
     const node = record(p.name, p.description, new Date(p.created).toLocaleString());
+    node.dataset.projectId = p.id;
+    if(p.restricted && !p.access_groups?.length) { const locked=document.createElement('small');locked.textContent='제한 공개 · 허용 그룹 없음 (관리자만)';node.append(locked); }
     const actions = document.createElement('div'); actions.className = 'record-actions';
     if (p.access_groups?.length) { const chips = document.createElement('div'); for (const g of p.access_groups) { const c = document.createElement('span'); c.className = 'chip lock'; c.textContent = '공개: ' + g; chips.append(c); } node.append(chips); }
     if (!p.archived && p.orca_available && currentUser?.role !== 'viewer') {
@@ -334,6 +343,7 @@ async function livePoll() {
     if (typeof renderTyping === 'function') renderTyping(now.typing || []);
     const prev = live.last; live.last = now; live.failures = 0;
     if (prev) {
+      if (now.board !== prev.board || now.access !== prev.access) await refreshNotices();
       if (now.board !== prev.board || now.events !== prev.events || Date.now() - live.lastFull > 60000) { live.lastFull = Date.now(); await refresh(); }
       else if (now.users !== prev.users) { if (typeof loadProfiles === 'function') await loadProfiles(); if (currentUser?.role === 'admin') await refreshAdmin(); }
       if (now.access !== prev.access && now.board === prev.board) { live.lastFull = Date.now(); await refresh(); }
@@ -354,6 +364,7 @@ async function liveLoop() {
   if (live.looping) return; live.looping = true; live.v = -1;
   while (currentUser && !$('dashboard').hidden) {
     try {
+      if (document.hidden) { await new Promise(res => setTimeout(res, 5000)); continue; }
       const r = await api(`/api/wait?v=${live.v}`);
       const changed = live.v !== -1 && r.v !== live.v; live.v = r.v;
       if (changed) await livePoll();
@@ -363,7 +374,7 @@ async function liveLoop() {
 }
 function liveSchedule() {
   clearTimeout(live.timer);
-  const delay = document.hidden ? 30000 : Math.min(15000 * Math.max(1, live.failures), 60000);
+  const delay = (document.hidden ? 30000 : Math.min(15000 * Math.max(1, live.failures), 60000)) + Math.random() * 1500;
   live.timer = setTimeout(async () => { await livePoll(); liveSchedule(); }, delay);
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) livePoll().finally(liveSchedule); });
@@ -453,10 +464,10 @@ $('photo-file').addEventListener('change', async () => {
   try { await api('/api/account/photo', {method:'POST', body:fd}); await refreshAccount(); message('사진을 바꿨습니다.'); } catch (e) { message(e.message); }
 });
 $('totp-start').addEventListener('click', async () => {
-  try { const r = await api('/api/account/totp/setup', {method:'POST'}); $('totp-secret').textContent = r.secret.replace(/(.{4})/g, '$1 ').trim(); $('totp-setup').hidden = false; $('totp-enable-form').elements.code.focus(); }
+  try { const password = await askPassword(); if (password === null) return; const r = await api('/api/account/totp/setup', {method:'POST', body:{password}}); $('totp-secret').textContent = r.secret.replace(/(.{4})/g, '$1 ').trim(); $('totp-setup').hidden = false; $('totp-enable-form').elements.code.focus(); }
   catch (e) { message(e.message); }
 });
-form('totp-enable-form', async data => { await api('/api/account/totp/enable', {method:'POST', body:{code:String(data.get('code'))}}); $('totp-enable-form').reset(); $('totp-setup').hidden = true; await refreshAccount(); message('2단계 인증을 켰습니다. 다음 로그인부터 인증 앱 코드가 필요합니다.'); $('home-2fa').hidden = true; });
+form('totp-enable-form', async data => { const result = await api('/api/account/totp/enable', {method:'POST', body:{code:String(data.get('code'))}}); $('recovery-codes').textContent = (result.recovery_codes || []).join('\n'); $('recovery-box').hidden = false; $('totp-enable-form').reset(); $('totp-secret').textContent = ''; $('totp-setup').hidden = true; await refreshAccount(); message('2단계 인증을 켰습니다. 다음 로그인부터 인증 앱 코드가 필요합니다.'); $('home-2fa').hidden = true; });
 form('totp-disable-form', async data => { if (!window.confirm('2단계 인증을 끌까요? 계정이 덜 안전해집니다.')) return; await api('/api/account/totp/disable', {method:'POST', body:{code:String(data.get('code'))}}); $('totp-disable-form').reset(); await refreshAccount(); message('2단계 인증을 껐습니다.'); });
 form('task-form', async data => {
   const project = $('task-project').value;
@@ -469,12 +480,12 @@ $('task-project').addEventListener('change', () => refreshTasks().catch(e => mes
 // ---------------- idle auto logout (30 min without keyboard/mouse/touch) ----------------
 let idleTimer = null;
 function idleWatch() {
-  const LIMIT = 30 * 60 * 1000;
+  const LIMIT = (currentUser?.idle_seconds || 1800) * 1000;
   const reset = () => { clearTimeout(idleTimer); idleTimer = setTimeout(async () => {
     if (!currentUser) return;
     try { await api('/api/logout', {method:'POST'}); } catch {}
-    showLogin(); message('30분 동안 사용하지 않아 자동으로 로그아웃되었습니다.');
+    showLogin(); message('일정 시간 사용하지 않아 자동으로 로그아웃되었습니다.');
   }, LIMIT); };
-  if (!idleWatch.bound) { for (const ev of ['mousedown', 'keydown', 'touchstart', 'wheel']) window.addEventListener(ev, reset, {passive:true}); idleWatch.bound = true; }
+  if (!idleWatch.bound) { for (const ev of ['mousedown', 'keydown', 'touchstart', 'wheel']) window.addEventListener(ev, () => { reset(); activityHeartbeat(); }, {passive:true}); idleWatch.bound = true; }
   reset();
 }

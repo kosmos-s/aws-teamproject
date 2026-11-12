@@ -1,94 +1,84 @@
-# 포털 데이터 모델
+# 포털 데이터 모델 — 2026-11-12 개선안
+
+현재 모델은 35개 테이블이다. 배포 여부는 STATUS.md의 최신 검증 기록을 따른다. 기존 8개 테이블 설명은 현재 전체 스키마가 아니다.
+
+## 관계 개요
 
 ```mermaid
 erDiagram
-    users ||--o{ sessions : authenticates
-    users ||--o| blocked_users : may_be_blocked
-    projects ||--o{ work_notes : contains
-    projects ||--o{ attachments : contains
-    projects ||--o| orca_projects : may_link_runtime
-    users |o--o{ chat_messages : sends
-    users |o--o{ chat_messages : receives_dm
-    users ||--o{ chat_reads : tracks
-    users {
-        int id PK
-        string username UK
-        string password_hash
-        string role
-    }
-    sessions {
-        string token_hash PK
-        int user_id FK
-        string csrf
-        float expires
-    }
-    blocked_users {
-        int user_id PK, FK
-    }
-    projects {
-        int id PK
-        string name
-        text description
-        string created
-    }
-    work_notes {
-        int id PK
-        int project_id FK
-        string author
-        text body
-        string created
-    }
-    orca_projects {
-        int project_id PK, FK
-        string label
-        string repository_url
-    }
-    attachments {
-        int id PK
-        int project_id FK
-        string name
-        string key
-        string media_type
-        int size
-    }
-    operation_events {
-        int id PK
-        string kind
-        string state
-        string created
-        text summary
-    }
-    chat_messages {
-        int id PK
-        string room
-        int sender_id FK
-        string sender_name
-        int recipient_id FK
-        text body
-        string created
-    }
-    chat_reads {
-        int user_id PK, FK
-        string room_key PK
-        int last_id
-    }
+    projects ||--o{ attachments : references
+    users ||--o{ blocked_users : references
+    users ||--o{ chat_messages : references
+    users ||--o{ chat_messages : references
+    users ||--o{ chat_reads : references
+    users ||--o{ group_members : references
+    team_groups ||--o{ group_members : references
+    projects ||--o{ orca_link_requests : references
+    projects ||--o{ orca_projects : references
+    users ||--o{ profiles : references
+    team_groups ||--o{ project_access : references
+    projects ||--o{ project_access : references
+    projects ||--o{ project_archives : references
+    users ||--o{ sessions : references
+    projects ||--o{ tasks : references
+    users ||--o{ user_activity : references
+    users ||--o{ user_totp : references
+    projects ||--o{ work_notes : references
+    attachments ||--o{ attachment_owners : references
+    chat_messages ||--o{ chat_attachments : references
+    chat_messages ||--o{ chat_edits : references
+    chat_messages ||--o{ chat_pins : references
+    users ||--o{ chat_reactions : references
+    chat_messages ||--o{ chat_reactions : references
+    chat_messages ||--o{ chat_replies : references
+    chat_messages ||--o{ chat_replies : references
+    work_notes ||--o{ note_edits : references
 ```
 
-팀 공동 포털이므로 로그인한 팀원끼리 프로젝트·메모·첨부를 공유한다. 사용자별 비공개 프로젝트 격리는 구현 범위에 없다. 모든 SQL 값은 ORM/파라미터로 전달한다.
-Orca의 내부 데이터베이스와 AI 자격증명은 이 DB에 포함하지 않는다.
+## 테이블과 컬럼
 
-## 팀 채팅 (2026-11-11 추가)
-- `chat_messages.room`이 `main`이면 전체 채팅, `dm`이면 `sender_id`↔`recipient_id` 1:1 대화다. `sender_name`을 함께 저장해 계정이 삭제돼도 전체 채팅 기록은 이름으로 남는다(`sender_id`는 NULL). 삭제된 계정의 1:1 대화와 읽음 기록은 지운다.
-- `chat_reads`는 사용자별·방별 마지막으로 읽은 메시지 id다. 읽지 않은 수 = 그 id보다 큰 상대 메시지 수.
-- 브라우저는 3초마다 `/api/changes`(최대 id·개수 지문)를 확인하고 바뀐 부분만 다시 불러온다. 별도 WebSocket 서버나 Nginx 설정 변경이 없다.
-- 조회 전용(게스트) 계정도 채팅은 쓸 수 있다. 프로젝트·메모·첨부 쓰기는 계속 거절한다. 한 사용자당 10초에 20개를 넘는 메시지는 429로 거절한다.
-- 업무 데이터 논리 백업 범위에는 채팅이 포함되지 않는다.
+| 테이블 | 컬럼 |
+|---|---|
+| `change_notices` | `id` PK, `project_id`, `kind`, `title`, `body`, `actor`, `admin_only`, `created` |
+| `notice_reads` | `user_id` PK, `last_id` |
+| `object_deletions` | `key` PK, `created`, `attempts` |
+| `operation_events` | `id` PK, `kind`, `state`, `created`, `summary` |
+| `project_policies` | `project_id` PK, `restricted` |
+| `projects` | `id` PK, `name`, `description`, `created` |
+| `recovery_codes` | `user_id` PK, `code_hash` PK |
+| `session_activity` | `token_hash` PK, `last_active` |
+| `team_groups` | `id` PK, `name`, `description`, `created` |
+| `totp_vault` | `user_id` PK, `encrypted` |
+| `upload_records` | `key` PK, `username`, `scope`, `size`, `created` |
+| `user_preferences` | `user_id` PK, `notify`, `sound` |
+| `users` | `id` PK, `username`, `password_hash`, `role` |
+| `attachments` | `id` PK, `project_id` FK, `name`, `key`, `media_type`, `size` |
+| `blocked_users` | `user_id` PK FK |
+| `chat_messages` | `id` PK, `room`, `sender_id` FK, `sender_name`, `recipient_id` FK, `body`, `created` |
+| `chat_reads` | `user_id` PK FK, `room_key` PK, `last_id` |
+| `group_members` | `group_id` PK FK, `user_id` PK FK |
+| `orca_link_requests` | `id` PK, `project_id` FK, `repository_url`, `folder`, `state`, `detail`, `requested_by`, `created`, `finished` |
+| `orca_projects` | `project_id` PK FK, `label`, `repository_url` |
+| `profiles` | `user_id` PK FK, `display_name`, `team`, `photo_key`, `updated` |
+| `project_access` | `project_id` PK FK, `group_id` PK FK |
+| `project_archives` | `project_id` PK FK, `archived_by`, `archived_at` |
+| `sessions` | `token_hash` PK, `user_id` FK, `csrf`, `expires` |
+| `tasks` | `id` PK, `project_id` FK, `title`, `status`, `assignee`, `due`, `created_by`, `created`, `updated` |
+| `user_activity` | `user_id` PK FK, `last_login`, `last_seen`, `must_change` |
+| `user_totp` | `user_id` PK FK, `secret`, `enabled`, `created` |
+| `work_notes` | `id` PK, `project_id` FK, `author`, `body`, `created` |
+| `attachment_owners` | `attachment_id` PK FK, `uploaded_by`, `uploaded_at` |
+| `chat_attachments` | `message_id` PK FK, `key`, `name`, `media_type`, `size` |
+| `chat_edits` | `message_id` PK FK, `edited_at`, `deleted` |
+| `chat_pins` | `room_key` PK, `message_id` FK, `pinned_by`, `pinned_at` |
+| `chat_reactions` | `message_id` PK FK, `user_id` PK FK, `emoji` PK, `created` |
+| `chat_replies` | `message_id` PK FK, `reply_to` FK |
+| `note_edits` | `note_id` PK FK, `edited_by`, `edited_at` |
 
-## 2026-11-12 추가 테이블
-- `attachment_owners(attachment_id PK·FK, uploaded_by, uploaded_at)` — 첨부 삭제 권한 판단. 이전 첨부는 행이 없어 관리자만 삭제.
-- `chat_edits(message_id PK·FK, edited_at, deleted)` — 채팅 수정·삭제 표시. 삭제 시 본문은 비운다.
-- `project_access(project_id PK·FK, group_id PK·FK)` — 행이 있으면 해당 그룹 멤버와 관리자만 프로젝트를 본다.
-- 2026-11-11 추가: `team_groups`, `group_members`, `user_activity`, `project_archives`, `note_edits`, `orca_link_requests`. 모두 기존 테이블을 `ALTER`하지 않는 별도 테이블이다.
+## 별도 보안·정책 메타데이터
 
-## 2026-11-12 협업 기능 테이블
-`chat_attachments`, `chat_replies`, `chat_reactions`, `chat_pins`, `tasks`, `profiles`, `user_totp`. 모두 새 테이블이며 기존 테이블은 바꾸지 않았다. 메시지·계정·그룹 삭제 시 참조 행을 먼저 지운다(`app/suite.py: purge_messages`).
+`project_policies`는 허용 그룹이 없어져도 제한 공개를 보존한다. `session_activity`는 세션별 유휴 활동 시각을 보관한다. `totp_vault`는 암호화 시드, `recovery_codes`는 일회용 복구 코드의 해시다. 이 별도 메타데이터의 관계 일부는 애플리케이션이 관리하며 위 FK 도식에 없는 관계를 DB 제약이라고 주장하지 않는다.
+
+`upload_records`는 활성 파일 용량을 집계하고 `object_deletions`는 실패한 실제 파일 삭제를 재시도한다. `change_notices`와 `notice_reads`는 다음 접속에도 남는 변경 내역과 계정별 확인 위치를 보관한다.
+
+Orca 내부 DB·AI 자격증명은 이 모델에 포함하지 않는다. 프로젝트 공개 범위는 포털 자료의 권한이며 공유 Orca 계정의 서버 파일 격리를 의미하지 않는다. 백업 v3의 범위와 제외 항목은 [보안·운영 개선](review-hardening.md)을 따른다.

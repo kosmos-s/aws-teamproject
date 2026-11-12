@@ -21,9 +21,8 @@ def now():
 
 def live_session(engine, cookie):
     with Session(engine) as db:
-        row = db.get(LoginSession, token_hash(cookie))
-        user = db.get(User, row.user_id) if row else None
-        return bool(row and row.expires > time.time() and user and user.role in {"admin", "member"} and not db.get(BlockedUser, user.id))
+        from .hardening import live_developer
+        return live_developer(db, token_hash(cookie))
 
 
 def obtain_pairing():

@@ -13,6 +13,9 @@ from sqlalchemy.orm import Session
 from .models import (User, BlockedUser, ChatMessage, ChatRead, ChatEdit, ChatAttachment, ChatReply, ChatReaction,
                      ChatPin, GroupMember, TeamGroup, Task, Profile, UserTotp, Project, Event)
 from .security import totp_new_secret, totp_verify
+from .hardening import (serialized, REACTION_LOCK, UPLOAD_LOCK, totp_secret, require_password,
+                        issue_recovery, record_upload, queue_delete)
+from .models import TotpVault, RecoveryCode, LoginSession, UserPreference
 
 REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
 CHAT_FILE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
@@ -30,6 +33,7 @@ def purge_messages(db, ids):
     if not ids:
         return []
     keys = list(db.scalars(select(ChatAttachment.key).where(ChatAttachment.message_id.in_(ids))))
+    for key in keys: queue_delete(db, key)
     for model, col in [(ChatAttachment, ChatAttachment.message_id), (ChatReaction, ChatReaction.message_id),
                        (ChatEdit, ChatEdit.message_id), (ChatPin, ChatPin.message_id)]:
         db.execute(delete(model).where(col.in_(ids)))
@@ -38,6 +42,10 @@ def purge_messages(db, ids):
 
 
 def forget_user_suite(db, user_id):
+    profile = db.get(Profile,user_id)
+    if profile and profile.photo_key: queue_delete(db,profile.photo_key)
+    for model in (TotpVault, RecoveryCode, UserPreference):
+        db.execute(delete(model).where(model.user_id == user_id))
     db.execute(delete(ChatReaction).where(ChatReaction.user_id == user_id))
     db.execute(delete(Profile).where(Profile.user_id == user_id))
     db.execute(delete(UserTotp).where(UserTotp.user_id == user_id))
@@ -144,6 +152,10 @@ class CodeInput(BaseModel):
     code: str = Field(min_length=6, max_length=10)
 
 
+class PasswordInput(BaseModel):
+    password: str = Field(max_length=256)
+
+
 def install_suite_routes(app, authenticated, admin):
     engine = app.state.engine
     storage = app.state.storage
@@ -153,6 +165,7 @@ def install_suite_routes(app, authenticated, admin):
 
     # ---------------- chat: files ----------------
     @app.post("/api/chat/{kind}/{rid}/files", status_code=201)
+    @serialized(UPLOAD_LOCK)
     def chat_file(kind: Literal["main", "group", "dm"], rid: int, file: UploadFile = File(...),
                   body: str = Form(default="", max_length=500), user=Depends(authenticated)):
         name = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
@@ -180,6 +193,7 @@ def install_suite_routes(app, authenticated, admin):
                     raise HTTPException(409, "Recipient is blocked")
                 room, recipient, read_key = "dm", peer.id, f"dm:{peer.id}"
             key = "attachments/" + secrets.token_hex(16)
+            record_upload(db,key,me.username,room if room!='dm' else f'dm:{min(me.id,recipient)}-{max(me.id,recipient)}',len(content))
             try:
                 storage.put(key, content, media)
             except Exception:
@@ -188,11 +202,8 @@ def install_suite_routes(app, authenticated, admin):
                             body=body.strip(), created=now())
             db.add(m); db.flush()
             db.add(ChatAttachment(message_id=m.id, key=key, name=name, media_type=media, size=len(content)))
-            r = db.get(ChatRead, (me.id, read_key))
-            if r is None:
-                db.add(ChatRead(user_id=me.id, room_key=read_key, last_id=m.id))
-            else:
-                r.last_id = max(r.last_id, m.id)
+            from .db_atomic import mark_read
+            mark_read(db,me.id,read_key,m.id)
             db.commit()
             return {"id": m.id}
 
@@ -202,7 +213,8 @@ def install_suite_routes(app, authenticated, admin):
             me = me_row(db, user)
             m = db.get(ChatMessage, message_id)
             f = db.get(ChatAttachment, message_id)
-            if not m or not f or not can_read_message(db, me, m):
+            edit = db.get(ChatEdit,message_id)
+            if not m or not f or (edit and edit.deleted) or not can_read_message(db, me, m):
                 raise HTTPException(404, "File not found")
             try:
                 content = storage.get(f.key)
@@ -216,6 +228,7 @@ def install_suite_routes(app, authenticated, admin):
 
     # ---------------- chat: reactions ----------------
     @app.post("/api/chat/messages/{message_id}/react")
+    @serialized(REACTION_LOCK)
     def react(message_id: int, data: ReactInput, user=Depends(authenticated)):
         if data.emoji not in REACTIONS:
             raise HTTPException(422, "Invalid input")
@@ -412,6 +425,7 @@ def install_suite_routes(app, authenticated, admin):
             return {"ok": True}
 
     @app.post("/api/account/photo")
+    @serialized(UPLOAD_LOCK)
     def set_photo(file: UploadFile = File(...), user=Depends(authenticated)):
         name = (file.filename or "").lower()
         media = PHOTO_TYPES.get(Path(name).suffix)
@@ -423,16 +437,16 @@ def install_suite_routes(app, authenticated, admin):
         if not (content.startswith(b"\x89PNG") or content.startswith(b"\xff\xd8")):
             raise HTTPException(415, "Allowed: png, jpg")
         key = "attachments/" + secrets.token_hex(16)
-        try:
-            storage.put(key, content, media)
-        except Exception:
-            raise HTTPException(503, "Storage unavailable")
         with Session(engine) as db:
             me = me_row(db, user)
+            record_upload(db,key,me.username,f'profile:{me.id}',len(content))
+            try: storage.put(key, content, media)
+            except Exception: raise HTTPException(503,"Storage unavailable")
             p = db.get(Profile, me.id)
             if not p:
                 p = Profile(user_id=me.id, display_name="", team="", updated=now()); db.add(p)
             old, p.photo_key, p.updated = p.photo_key, key, now()
+            if old: queue_delete(db,old)
             db.commit()
         if old:
             storage.discard(old)
@@ -460,17 +474,22 @@ def install_suite_routes(app, authenticated, admin):
             return {"enabled": bool(row and row.enabled)}
 
     @app.post("/api/account/totp/setup")
-    def totp_setup(user=Depends(authenticated)):
+    def totp_setup(data:PasswordInput,user=Depends(authenticated)):
+        app.state.totp_limit.check(user['id'])
         with Session(engine) as db:
-            me = me_row(db, user)
+            me = require_password(db,user['username'],data.password)
             row = db.get(UserTotp, me.id)
             if row and row.enabled:
                 raise HTTPException(409, "Two-factor already enabled")
             secret = totp_new_secret()
             if row:
-                row.secret, row.created = secret, now()
+                row.secret, row.created = 'vault', now()
             else:
-                db.add(UserTotp(user_id=me.id, secret=secret, enabled=0, created=now()))
+                db.add(UserTotp(user_id=me.id, secret='vault', enabled=0, created=now()))
+            v=db.get(TotpVault,me.id)
+            encrypted=app.state.totp_vault.encrypt(secret.encode()).decode()
+            if v: v.encrypted=encrypted
+            else: db.add(TotpVault(user_id=me.id,encrypted=encrypted))
             db.commit()
             from urllib.parse import quote
             uri = f"otpauth://totp/KOSMOS:{quote(me.username)}?secret={secret}&issuer=KOSMOS&digits=6&period=30"
@@ -478,40 +497,56 @@ def install_suite_routes(app, authenticated, admin):
 
     @app.post("/api/account/totp/enable")
     def totp_enable(data: CodeInput, user=Depends(authenticated)):
+        app.state.totp_limit.check(user['id'])
         with Session(engine) as db:
             me = me_row(db, user)
             row = db.get(UserTotp, me.id)
             if not row:
                 raise HTTPException(409, "Start two-factor setup first")
-            if not totp_verify(row.secret, data.code):
+            if row.enabled: raise HTTPException(409,'Two-factor already enabled')
+            if not totp_verify(totp_secret(db,app.state.totp_vault,row), data.code):
                 raise HTTPException(403, "Invalid code")
             row.enabled = 1
+            codes=issue_recovery(db,me.id)
             db.add(Event(kind="security", state="ok", created=now(), summary=f"{me.username}: enabled two-factor login"))
             db.commit()
-            return {"enabled": True}
+            return {"enabled": True,"recovery_codes":codes}
 
     @app.post("/api/account/totp/disable")
     def totp_disable(data: CodeInput, user=Depends(authenticated)):
+        app.state.totp_limit.check(user['id'])
         with Session(engine) as db:
             me = me_row(db, user)
             row = db.get(UserTotp, me.id)
             if not row or not row.enabled:
                 raise HTTPException(409, "Two-factor not enabled")
-            if not totp_verify(row.secret, data.code):
+            if not totp_verify(totp_secret(db,app.state.totp_vault,row), data.code):
                 raise HTTPException(403, "Invalid code")
             db.delete(row)
+            db.execute(delete(TotpVault).where(TotpVault.user_id==me.id))
+            db.execute(delete(RecoveryCode).where(RecoveryCode.user_id==me.id))
+            hashes=list(db.scalars(select(LoginSession.token_hash).where(LoginSession.user_id==me.id,LoginSession.token_hash!=user['session_hash'])))
+            db.execute(delete(LoginSession).where(LoginSession.token_hash.in_(hashes)))
             db.add(Event(kind="security", state="ok", created=now(), summary=f"{me.username}: disabled two-factor login"))
             db.commit()
+            for h in hashes: app.state.orca_revoke_hash(h)
             return {"enabled": False}
 
     @app.delete("/api/admin/users/{user_id}/totp")
-    def totp_reset(user_id: int, actor=Depends(admin)):
+    def totp_reset(user_id: int, data:PasswordInput, actor=Depends(admin)):
         """Recovery for a member who lost their phone (admin only)."""
         with Session(engine) as db:
+            app.state.totp_limit.check(actor['id'])
+            require_password(db,actor['username'],data.password)
             target = db.get(User, user_id)
             if not target:
                 raise HTTPException(404, "User not found")
             db.execute(delete(UserTotp).where(UserTotp.user_id == user_id))
+            db.execute(delete(TotpVault).where(TotpVault.user_id == user_id))
+            db.execute(delete(RecoveryCode).where(RecoveryCode.user_id == user_id))
+            hashes=list(db.scalars(select(LoginSession.token_hash).where(LoginSession.user_id==user_id)))
+            db.execute(delete(LoginSession).where(LoginSession.user_id==user_id))
             db.add(Event(kind="security", state="ok", created=now(), summary=f"{actor['username']}: reset two-factor of {target.username}"))
             db.commit()
+            for h in hashes: app.state.orca_revoke_hash(h)
             return {"ok": True}
