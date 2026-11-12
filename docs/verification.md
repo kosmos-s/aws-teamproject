@@ -119,3 +119,12 @@ EC2에서 새 코드 백업 명령으로 Git HEAD를 백업하고 별도의 빈 
 - 셸 문법, Python 컴파일, JavaScript 문법, `pip check`, diff 공백 검사를 통과했다. 고정 의존성의 Starlette TestClient/httpx 사용 중단 예정 경고는 있으나 테스트 실패는 없다.
 - 운영 파일의 LF 체크섬이 기준 main과 같고 포털/브로커/Nginx/Webmin active인 것을 배포 전 읽기 전용으로 확인했다. RDS 비공개·암호화와 S3 공개 차단도 확인했다. 이 기록 이후 예약 종료나 상태 변화는 다시 조회해야 한다.
 - 아직 미수행: 이번 릴리스 main 병합·원격 CI 결과·실제 서버 배포/복구·운영 MySQL 동시 부하·AI 로그인. 서버 배포/main/AWS 변경은 최신 사용자 확인 절차를 따른다.
+
+## 2026-11-12 실제 main 릴리스 검증
+- PR #6 main `37855ed52c9b8b3dfaee686f069a4ed896efb7f5`, [CI 성공](https://github.com/kosmos-s/aws-teamproject/actions/runs/43148499740). 서버 릴리스 전체 파일 체크섬 일치.
+- 실제 RDS 스키마 35개 테이블 및 TLS 확인. TOTP 암호화 키 0600, 기존 TOTP 설정 1건의 복호화 호환 검사 통과(값 출력 없음).
+- 운영 RDS/S3 논리 백업 235,694바이트를 별도 빈 SQLite/파일 폴더에 복구. 24개 업무 테이블·97행 및 파일 체크섬 검증. 원본 운영 데이터 덮어쓰기 없음.
+- 정상 DNS/유효 TLS: /health 200, /api/projects·/api/notices·/api/admin/diagnostics·/orca/web-index.html·/webmin/ 모두 비로그인 401. 새 JS 자산 200, 잘못된 Origin 403, S3 익명 요청 403.
+- 공개 SG 인바운드는 80/443. RDS SG의 CIDR 인바운드 없음, 비공개/암호화·추가 모니터링 비활성, S3 공개 차단 4개 모두 활성, 기존 EIP 유지와 기존 S3 삭제 권한 확인.
+- 설치 중 패키지 읽기 권한 문제는 복구 후 위 검증을 다시 수행했다. 후속 셸 회귀는 서비스 초기화 실패를 강제로 만들고 구형 코드/TOTP 호환 복구가 실제 실행되는 것을 확인한다.
+- 이 결과는 사용자 100명 운영 수용, 실제 AI 실행, 원래 PPT 바이너리 최신화 또는 RDS 스냅샷/PITR 복구의 증거가 아니다.
