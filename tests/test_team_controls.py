@@ -91,18 +91,36 @@ class TeamControlsTests(unittest.TestCase):
         member.close()
 
     def test_user_changes_own_password_keeps_current_session(self):
-        other = self.member_client()
         member = self.member_client()
         wrong = member.post("/api/account/password", json={"current": "nope", "new": "abcdefgh"})
         self.assertEqual(wrong.status_code, 403)
         self.assertEqual(member.get("/api/session").status_code, 200)
         ok = member.post("/api/account/password", json={"current": "A-team-test-password-93", "new": "abcdefgh"})
         self.assertEqual(ok.status_code, 200)
-        self.assertEqual(ok.json()["other_sessions_revoked"], 1)
+        self.assertEqual(ok.json()["other_sessions_revoked"], 0)  # single-session rule: there are no others
         self.assertEqual(member.get("/api/session").status_code, 200)
-        self.assertEqual(other.get("/api/session").status_code, 401)
+        other = TestClient(self.app); other.headers["Origin"] = "http://testserver"
+        self.assertEqual(other.post("/api/login", json={"username": "member", "password": "A-team-test-password-93"}).status_code, 401)
         self.assertEqual(other.post("/api/login", json={"username": "member", "password": "abcdefgh"}).status_code, 200)
         other.close(); member.close()
+
+    def test_new_login_ends_older_session_of_same_account(self):
+        first = self.member_client()
+        self.assertEqual(first.get("/api/session").status_code, 200)
+        second = TestClient(self.app); second.headers["Origin"] = "http://testserver"
+        r = second.post("/api/login", json={"username": "member", "password": "A-team-test-password-93"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["ended_sessions"], 1)
+        old = first.get("/api/session")
+        self.assertEqual(old.status_code, 401)
+        self.assertEqual(old.json()["detail"], "Signed in elsewhere")
+        self.assertEqual(second.get("/api/session").status_code, 200)
+        # a different account is not affected
+        self.assertEqual(self.client.get("/api/session").status_code, 200)
+        # a session that simply never existed is a plain login prompt
+        stranger = TestClient(self.app); stranger.cookies.set("kosmos_session", "nope")
+        self.assertEqual(stranger.get("/api/session").json()["detail"], "Login required")
+        first.close(); second.close(); stranger.close()
 
     def test_viewer_can_change_own_password(self):
         create_user(self.app.state.engine, "watcher", "A-team-test-password-93", "viewer")

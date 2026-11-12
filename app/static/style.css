@@ -55,3 +55,9 @@ button.small{padding:5px 10px;font-size:12px}
 .msg-tools button{background:#0f1628;color:#c9d4ea;padding:3px 8px;font-size:11px;border-radius:6px}
 @media(max-width:600px){main{padding:0 12px}.panel{padding:16px}.metrics{gap:10px}.chat-log{max-height:55vh}.msg{max-width:92%}.msg-tools{display:flex}.member-row .secret input{min-width:0}header{height:64px}h1{font-size:26px}}
 #files .record small{display:block;margin-bottom:4px}#files .record a{margin-right:8px}
+.toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:50;max-width:320px}
+.toast{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;background:#1f2d52;color:#fff;border:1px solid #3c5594;border-radius:12px;padding:12px 14px;box-shadow:0 10px 30px rgba(0,0,0,.35);animation:toast-in .2s ease-out}
+.toast:hover{background:#2a3d6e}.toast span{font-size:12.5px;color:#c9d4ea;font-weight:500}
+@keyframes toast-in{from{transform:translateY(10px);opacity:0}to{transform:none;opacity:1}}
+label.check{display:flex;align-items:center;gap:8px;font-size:14px;margin:6px 0}label.check input{width:auto}
+@media(max-width:600px){.toasts{left:12px;right:12px;max-width:none}}
