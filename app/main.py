@@ -30,6 +30,7 @@ def now():
 class LoginInput(BaseModel):
     username: str = Field(max_length=80)
     password: str = Field(max_length=256)
+    otp: str = Field(default="", max_length=10)
 
 
 class ProjectInput(BaseModel):
@@ -55,6 +56,14 @@ class NoteInput(BaseModel):
         return value.strip()
 
 
+def settings_idle_seconds():
+    import os
+    try:
+        return max(5, int(os.getenv("IDLE_MINUTES", "30"))) * 60
+    except ValueError:
+        return 1800
+
+
 def create_app(settings=None):
     settings = settings or Settings.from_env()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -69,6 +78,9 @@ def create_app(settings=None):
     account_failures = {}  # per-username lockout, independent of client IP
     seen = {}  # user_id -> last time last_seen was written (throttle DB writes)
     replaced = {}  # token_hash -> time it was ended by a newer login of the same account
+    last_active = {}  # token_hash -> last user-initiated request (background polling does not count)
+    IDLE_LIMIT = settings_idle_seconds()
+    BACKGROUND = {"/api/wait", "/api/changes", "/api/status", "/api/events", "/api/chat/people"}
     FORCED_OK = {"/api/session", "/api/logout", "/api/account/password"}
     dummy_hash = password_hash("unmatched-dummy-password")
 
@@ -107,10 +119,16 @@ def create_app(settings=None):
                 if hashed in replaced:
                     raise HTTPException(401, "Signed in elsewhere")
                 raise HTTPException(401, "Login required")
+            idle_since = last_active.setdefault(hashed, time.time())
+            if time.time() - idle_since > IDLE_LIMIT:
+                db.delete(row); db.commit(); last_active.pop(hashed, None)
+                raise HTTPException(401, "Session idle")
+            if request.url.path not in BACKGROUND:
+                last_active[hashed] = time.time()
             user = db.get(User, row.user_id)
             if not user or db.get(BlockedUser, user.id):
                 raise HTTPException(401, "Login required")
-            if user.role == "viewer" and request.method not in {"GET", "HEAD"} and request.url.path not in {"/api/logout", "/api/account/password"} and not request.url.path.startswith("/api/chat/"):
+            if user.role == "viewer" and request.method not in {"GET", "HEAD"} and request.url.path != "/api/logout" and not request.url.path.startswith(("/api/chat/", "/api/account/")):
                 raise HTTPException(403, "Read-only account")
             if request.method not in {"GET", "HEAD"} and not secrets.compare_digest(request.headers.get("x-csrf-token", ""), row.csrf):
                 raise HTTPException(403, "CSRF rejected")
@@ -141,6 +159,16 @@ def create_app(settings=None):
                 failures[key] = recent + [time.time()]
                 account_failures[account] = account_recent + [time.time()]
                 raise HTTPException(401, "Invalid credentials")
+            from .models import UserTotp
+            from .security import totp_verify
+            second = db.get(UserTotp, user.id)
+            if second and second.enabled:
+                if not data.otp:
+                    raise HTTPException(401, "OTP required")  # password was right; ask for the code
+                if not totp_verify(second.secret, data.otp):
+                    failures[key] = recent + [time.time()]
+                    account_failures[account] = account_recent + [time.time()]
+                    raise HTTPException(401, "Invalid OTP")
             failures.pop(key, None)
             account_failures.pop(account, None)
             db.execute(delete(LoginSession).where(LoginSession.expires <= time.time()))

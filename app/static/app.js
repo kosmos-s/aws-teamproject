@@ -2,7 +2,13 @@
 let csrf = '';
 let currentUser = null;
 const $ = id => document.getElementById(id);
-const message = text => { $('message').textContent = text; };
+// Status line: fades out after a few seconds (longer for longer messages) so it does not linger.
+let messageTimer = null;
+const message = text => {
+  const el = $('message'); clearTimeout(messageTimer);
+  el.textContent = text; el.classList.toggle('show', !!text);
+  if (text) messageTimer = setTimeout(() => { el.classList.remove('show'); setTimeout(() => { if (!el.classList.contains('show')) el.textContent = ''; }, 400); }, Math.min(12000, 4000 + text.length * 60));
+};
 async function api(path, options = {}) {
   options.headers = { ...options.headers, 'X-CSRF-Token': csrf };
   if (options.body && !(options.body instanceof FormData)) {
@@ -19,7 +25,7 @@ async function api(path, options = {}) {
     if (response.status === 401 && path !== '/api/login') {
       const wasIn = !!currentUser;
       showLogin();
-      const text = detail === 'Signed in elsewhere' ? '다른 곳에서 같은 아이디로 로그인해 이 화면의 접속이 끊겼습니다. 계속하려면 다시 로그인하세요.' : '로그인이 필요하거나 만료되었습니다. 다시 로그인하세요.';
+      const text = detail === 'Signed in elsewhere' ? '다른 곳에서 같은 아이디로 로그인해 이 화면의 접속이 끊겼습니다. 계속하려면 다시 로그인하세요.' : (ERRORS[detail] || '로그인이 필요하거나 만료되었습니다. 다시 로그인하세요.');
       if (wasIn) message(text);  // background requests swallow errors, so show it here
       throw new Error(text);
     }
@@ -61,6 +67,19 @@ const ERRORS = {
   'Message not found': '메시지를 찾을 수 없습니다.',
   'Message already deleted': '이미 삭제된 메시지입니다.',
   'Signed in elsewhere': '다른 곳에서 같은 아이디로 로그인해 접속이 끊겼습니다.',
+  'OTP required': '2단계 인증이 켜진 계정입니다. 인증 앱 코드 6자리를 입력하세요.',
+  'Invalid OTP': '인증 앱 코드가 맞지 않습니다. 시간이 맞는지 확인하고 새 코드로 다시 입력하세요.',
+  'Invalid code': '인증 앱 코드가 맞지 않습니다.',
+  'Two-factor already enabled': '2단계 인증이 이미 켜져 있습니다.',
+  'Two-factor not enabled': '2단계 인증이 꺼져 있습니다.',
+  'Start two-factor setup first': '먼저 2단계 인증 설정을 시작하세요.',
+  'Session idle': '30분 동안 사용하지 않아 자동으로 로그아웃되었습니다. 다시 로그인하세요.',
+  'Task not found': '할 일을 찾을 수 없습니다. 새로고침하세요.',
+  'Only the creator or an administrator': '만든 사람이나 관리자만 삭제할 수 있습니다.',
+  'Allowed: png, jpg, gif, pdf, txt': 'PNG, JPG, GIF, PDF, TXT 파일만 보낼 수 있습니다.',
+  'Maximum 1.5 MiB': '파일은 1.5MiB까지 보낼 수 있습니다.',
+  'Allowed: png, jpg': 'PNG, JPG 사진만 올릴 수 있습니다.',
+  'Maximum 512 KiB': '사진은 512KB까지 올릴 수 있습니다.',
   'Too many messages': '메시지를 너무 빨리 보내고 있습니다. 잠시 후 다시 보내세요.',
   'User not found': '계정을 찾을 수 없습니다. 새로고침하세요.',
   'Project not found': '프로젝트를 찾을 수 없습니다. 새로고침하세요.',
@@ -94,9 +113,9 @@ async function enter(session) {
   $('force-password').hidden = true; $('dashboard').hidden = false;
   showView(location.hash.slice(1) || 'home', false);
   await refresh(); await chatStart();
-  liveLoop();
+  liveLoop(); dueAlert(); idleWatch();
 }
-const VIEWS = ['home','chat','projects','notes','files','history','account','guide','members','groups','orca','audit','operations','server'];
+const VIEWS = ['home','chat','projects','tasks','notes','files','history','account','guide','members','groups','orca','audit','operations','server'];
 function showView(name, push = true) {
   if (!VIEWS.includes(name)) name = 'home';
   const adminView = ['members','groups','orca','audit','operations','server'].includes(name);
@@ -105,6 +124,8 @@ function showView(name, push = true) {
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === name));
   if (push && location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
   if (name === 'audit' && typeof refreshAudit === 'function') refreshAudit().catch(e => message(e.message));
+  if (name === 'tasks') refreshTasks().catch(e => message(e.message));
+  if (name === 'account') refreshAccount().catch(e => message(e.message));
 }
 function record(title, body, meta) {
   const node = document.createElement('article'); node.className = 'record';
@@ -259,7 +280,13 @@ function form(id, handler) {
   });
 }
 form('login-form', async data => {
-  const result = await api('/api/login', {method:'POST', body:Object.fromEntries(data)}); csrf = result.csrf;
+  let result;
+  try { result = await api('/api/login', {method:'POST', body:Object.fromEntries(data)}); }
+  catch (error) {
+    if (/인증 앱 코드|2단계/.test(error.message)) { $('otp-label').hidden = false; $('login-form').elements.otp.focus(); }
+    throw error;
+  }
+  csrf = result.csrf; $('otp-label').hidden = true;
   const session = await api('/api/session'); $('login-form').reset(); await enter(session);
 });
 form('force-password-form', async data => {
@@ -304,12 +331,12 @@ async function livePoll() {
     const prev = live.last; live.last = now; live.failures = 0;
     if (prev) {
       if (now.board !== prev.board || now.events !== prev.events || Date.now() - live.lastFull > 60000) { live.lastFull = Date.now(); await refresh(); }
-      else if (now.users !== prev.users && currentUser?.role === 'admin') await refreshAdmin();
+      else if (now.users !== prev.users) { if (typeof loadProfiles === 'function') await loadProfiles(); if (currentUser?.role === 'admin') await refreshAdmin(); }
       if (now.access !== prev.access && now.board === prev.board) { live.lastFull = Date.now(); await refresh(); }
       if (now.chat !== prev.chat || now.access !== prev.access) {
         const [a, b] = [now.chat.split('|'), prev.chat.split('|')];
         // edits (part 2) or read progress (part 3) change messages already on screen: reload the room
-        await chatTick(a[2] !== b[2] || a[3] !== b[3]);
+        await chatTick(a.slice(2).join('|') !== b.slice(2).join('|'));
       }
     } else live.lastFull = Date.now();
     if ($('message').dataset.offline) { message(''); delete $('message').dataset.offline; }
@@ -337,3 +364,113 @@ function liveSchedule() {
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) livePoll().finally(liveSchedule); });
 liveSchedule();
+
+
+// ---------------- kanban tasks ----------------
+const TASK_STEPS = ['todo', 'doing', 'done'];
+async function refreshTasks() {
+  const sel = $('task-project'); const keep = sel.value;
+  const projects = (await api('/api/projects')).filter(p => !p.archived);
+  sel.replaceChildren();
+  const all = document.createElement('option'); all.value = ''; all.textContent = '모든 프로젝트'; sel.append(all);
+  for (const p of projects) { const o = document.createElement('option'); o.value = p.id; o.textContent = p.name; sel.append(o); }
+  if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+  const asg = $('task-assignee'); const keepA = asg.value; asg.replaceChildren();
+  const none = document.createElement('option'); none.value = ''; none.textContent = '담당자 없음'; asg.append(none);
+  const people = [currentUser.username, ...((typeof chat !== 'undefined' ? chat.peers : []).map(p => p.username))];
+  for (const n of [...new Set(people)]) { const o = document.createElement('option'); o.value = n; o.textContent = (typeof displayName === 'function') ? displayName(n) : n; asg.append(o); }
+  asg.value = keepA;
+  const names = Object.fromEntries(projects.map(p => [p.id, p.name]));
+  const list = await api('/api/tasks' + (sel.value ? `?project_id=${sel.value}` : ''));
+  const today = new Date().toISOString().slice(0, 10);
+  const soon = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  for (const col of document.querySelectorAll('.kcol')) {
+    const status = col.dataset.status, box = col.querySelector('.kcards'); box.replaceChildren();
+    const items = list.filter(x => x.status === status);
+    col.querySelector('small').textContent = String(items.length);
+    for (const x of items) {
+      const card = document.createElement('div'); card.className = 'kcard';
+      if (x.status !== 'done' && x.due && x.due <= soon) card.classList.add(x.due < today ? 'overdue' : 'due-soon');
+      const title = document.createElement('strong'); title.textContent = x.title;
+      const meta = document.createElement('small');
+      meta.textContent = [names[x.project_id] || '', x.assignee ? '👤 ' + ((typeof displayName === 'function') ? displayName(x.assignee) : x.assignee) : '', x.due ? '📅 ' + x.due : ''].filter(Boolean).join(' · ');
+      const row = document.createElement('div'); row.className = 'note-actions';
+      const idx = TASK_STEPS.indexOf(x.status);
+      const move = (d, label) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'secondary small'; b.textContent = label; b.disabled = idx + d < 0 || idx + d > 2; b.addEventListener('click', async () => { try { await api(`/api/tasks/${x.id}`, {method:'PATCH', body:{status: TASK_STEPS[idx + d]}}); await refreshTasks(); } catch (e) { message(e.message); } }); return b; };
+      row.append(move(-1, '◀'), move(1, '▶'));
+      if (x.created_by === currentUser.username || currentUser.role === 'admin') {
+        const del = document.createElement('button'); del.type = 'button'; del.className = 'danger small'; del.textContent = '삭제';
+        del.addEventListener('click', async () => { if (!window.confirm('이 할 일을 삭제할까요?')) return; try { await api(`/api/tasks/${x.id}`, {method:'DELETE'}); await refreshTasks(); } catch (e) { message(e.message); } });
+        row.append(del);
+      }
+      card.append(title, meta, row); box.append(card);
+    }
+    if (!items.length) { const p = document.createElement('p'); p.className = 'muted'; p.textContent = '비어 있음'; box.append(p); }
+  }
+  $('task-form').hidden = currentUser.role === 'viewer' || !projects.length;
+}
+async function dueAlert() {
+  try {
+    const due = await api('/api/tasks/due');
+    const box = $('home-due-list'); box.replaceChildren(); $('home-due').hidden = !due.length;
+    const badge = $('nav-task-badge'); badge.hidden = !due.length; badge.textContent = String(due.length);
+    for (const x of due) box.append(record(x.title, x.due < new Date().toISOString().slice(0, 10) ? '마감일이 지났습니다' : '마감 임박', '📅 ' + x.due));
+    if (due.length && !sessionStorage.getItem('kosmos-due-shown')) {
+      try { sessionStorage.setItem('kosmos-due-shown', '1'); } catch {}
+      if (typeof toast === 'function') { toast('⏰ 마감 임박한 할 일', `내일까지 마감인 내 할 일 ${due.length}개`, 'main'); document.querySelector('#toasts .toast:last-child')?.addEventListener('click', e => { e.stopImmediatePropagation(); showView('tasks'); }, {capture:true}); }
+    }
+  } catch { /* optional */ }
+  $('home-2fa').hidden = true;
+  if (currentUser?.role === 'admin') { try { const s = await api('/api/account/totp'); $('home-2fa').hidden = s.enabled; } catch {} }
+}
+
+// ---------------- account: profile + 2FA ----------------
+async function refreshAccount() {
+  if (typeof loadProfiles === 'function') await loadProfiles();
+  const me = (typeof profiles !== 'undefined' && profiles[currentUser.username]) || {};
+  const f = $('profile-form'); if (document.activeElement?.closest('#profile-form') == null) { f.elements.display_name.value = me.display_name || ''; f.elements.team.value = me.team || ''; }
+  const av = $('profile-avatar'); av.replaceChildren(...(typeof avatar === 'function' ? avatar(currentUser.username).childNodes : []));
+  if (!av.childNodes.length) av.textContent = currentUser.username.slice(0, 1).toUpperCase();
+  const s = await api('/api/account/totp');
+  $('totp-state').textContent = s.enabled ? '✅ 2단계 인증이 켜져 있습니다.' : '꺼져 있습니다.';
+  $('totp-start').hidden = s.enabled; $('totp-disable-form').hidden = !s.enabled;
+  if (s.enabled) $('totp-setup').hidden = true;
+}
+form('profile-form', async data => {
+  await api('/api/account/profile', {method:'PUT', body:{display_name:String(data.get('display_name') || ''), team:String(data.get('team') || '')}});
+  await refreshAccount(); message('프로필을 저장했습니다.');
+});
+$('photo-button').addEventListener('click', () => $('photo-file').click());
+$('photo-file').addEventListener('change', async () => {
+  const f = $('photo-file').files[0]; $('photo-file').value = ''; if (!f) return;
+  if (!/\.(png|jpe?g)$/i.test(f.name)) return message('PNG, JPG 사진만 올릴 수 있습니다.');
+  if (f.size > 512 * 1024) return message('사진은 512KB까지 올릴 수 있습니다.');
+  const fd = new FormData(); fd.append('file', f);
+  try { await api('/api/account/photo', {method:'POST', body:fd}); await refreshAccount(); message('사진을 바꿨습니다.'); } catch (e) { message(e.message); }
+});
+$('totp-start').addEventListener('click', async () => {
+  try { const r = await api('/api/account/totp/setup', {method:'POST'}); $('totp-secret').textContent = r.secret.replace(/(.{4})/g, '$1 ').trim(); $('totp-setup').hidden = false; $('totp-enable-form').elements.code.focus(); }
+  catch (e) { message(e.message); }
+});
+form('totp-enable-form', async data => { await api('/api/account/totp/enable', {method:'POST', body:{code:String(data.get('code'))}}); $('totp-enable-form').reset(); $('totp-setup').hidden = true; await refreshAccount(); message('2단계 인증을 켰습니다. 다음 로그인부터 인증 앱 코드가 필요합니다.'); $('home-2fa').hidden = true; });
+form('totp-disable-form', async data => { if (!window.confirm('2단계 인증을 끌까요? 계정이 덜 안전해집니다.')) return; await api('/api/account/totp/disable', {method:'POST', body:{code:String(data.get('code'))}}); $('totp-disable-form').reset(); await refreshAccount(); message('2단계 인증을 껐습니다.'); });
+form('task-form', async data => {
+  const project = $('task-project').value;
+  if (!project) throw new Error('먼저 위에서 프로젝트를 고르세요.');
+  await api('/api/tasks', {method:'POST', body:{project_id:Number(project), title:String(data.get('title')), assignee:String(data.get('assignee') || '') || null, due:String(data.get('due') || '') || null}});
+  $('task-form').reset(); await refreshTasks(); dueAlert();
+});
+$('task-project').addEventListener('change', () => refreshTasks().catch(e => message(e.message)));
+
+// ---------------- idle auto logout (30 min without keyboard/mouse/touch) ----------------
+let idleTimer = null;
+function idleWatch() {
+  const LIMIT = 30 * 60 * 1000;
+  const reset = () => { clearTimeout(idleTimer); idleTimer = setTimeout(async () => {
+    if (!currentUser) return;
+    try { await api('/api/logout', {method:'POST'}); } catch {}
+    showLogin(); message('30분 동안 사용하지 않아 자동으로 로그아웃되었습니다.');
+  }, LIMIT); };
+  if (!idleWatch.bound) { for (const ev of ['mousedown', 'keydown', 'touchstart', 'wheel']) window.addEventListener(ev, reset, {passive:true}); idleWatch.bound = true; }
+  reset();
+}

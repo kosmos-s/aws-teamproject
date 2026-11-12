@@ -89,3 +89,6 @@ Orca의 내부 데이터베이스와 AI 자격증명은 이 DB에 포함하지 �
 - `chat_edits(message_id PK·FK, edited_at, deleted)` — 채팅 수정·삭제 표시. 삭제 시 본문은 비운다.
 - `project_access(project_id PK·FK, group_id PK·FK)` — 행이 있으면 해당 그룹 멤버와 관리자만 프로젝트를 본다.
 - 2026-11-11 추가: `team_groups`, `group_members`, `user_activity`, `project_archives`, `note_edits`, `orca_link_requests`. 모두 기존 테이블을 `ALTER`하지 않는 별도 테이블이다.
+
+## 2026-11-12 협업 기능 테이블
+`chat_attachments`, `chat_replies`, `chat_reactions`, `chat_pins`, `tasks`, `profiles`, `user_totp`. 모두 새 테이블이며 기존 테이블은 바꾸지 않았다. 메시지·계정·그룹 삭제 시 참조 행을 먼저 지운다(`app/suite.py: purge_messages`).

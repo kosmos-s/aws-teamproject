@@ -194,10 +194,10 @@ def install_teamwork_routes(app, authenticated, admin):
             db.execute(delete(GroupMember).where(GroupMember.group_id == group_id))
             from .extras import forget_group_access
             forget_group_access(db, group_id)
-            from .models import ChatEdit
-            gids = list(db.scalars(select(ChatMessage.id).where(ChatMessage.room == f"g{group_id}")))
-            if gids:
-                db.execute(delete(ChatEdit).where(ChatEdit.message_id.in_(gids)))
+            from .suite import purge_messages
+            purge_messages(db, list(db.scalars(select(ChatMessage.id).where(ChatMessage.room == f"g{group_id}"))))
+            from .models import ChatPin
+            db.execute(delete(ChatPin).where(ChatPin.room_key == f"g{group_id}"))
             db.execute(delete(ChatMessage).where(ChatMessage.room == f"g{group_id}"))
             db.execute(delete(ChatRead).where(ChatRead.room_key == f"g:{group_id}"))
             db.delete(g)
