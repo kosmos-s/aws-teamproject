@@ -269,3 +269,51 @@ window.addEventListener('DOMContentLoaded', () => {
     message(`${r.created}명을 만들었습니다. 임시 비밀번호는 지금만 보이며, 첫 로그인 때 본인이 바꿉니다.`);
   });
 });
+
+
+// Project visibility: no groups = all members; otherwise only those groups (and admins).
+async function openAccessEditor(node, project) {
+  if (node.querySelector('.group-editor')) return;
+  live.editing = true;
+  let groups, current;
+  try { [groups, current] = await Promise.all([api('/api/admin/groups'), api(`/api/admin/projects/${project.id}/access`)]); }
+  catch (error) { live.editing = false; message(error.message); return; }
+  const ed = document.createElement('div'); ed.className = 'group-editor';
+  const help = document.createElement('small'); help.textContent = groups.length ? '아무 그룹도 고르지 않으면 모든 멤버에게 보입니다. 관리자는 항상 볼 수 있습니다.' : '그룹이 없습니다. 그룹 관리에서 먼저 만드세요.';
+  const picks = document.createElement('div'); picks.className = 'picks';
+  const chosen = new Set(current.group_ids);
+  for (const g of groups) {
+    const l = document.createElement('label'); const c = document.createElement('input'); c.type = 'checkbox'; c.checked = chosen.has(g.id);
+    c.addEventListener('change', () => { if (c.checked) chosen.add(g.id); else chosen.delete(g.id); });
+    l.append(c, document.createTextNode(`${g.name} (${g.user_ids.length}명)`)); picks.append(l);
+  }
+  const row = document.createElement('div'); row.className = 'note-actions';
+  const save = document.createElement('button'); save.textContent = '저장';
+  const cancel = document.createElement('button'); cancel.className = 'secondary'; cancel.textContent = '취소';
+  row.append(save, cancel); ed.append(help, picks, row); node.append(ed);
+  cancel.addEventListener('click', () => { live.editing = false; refresh().catch(e => message(e.message)); });
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    try {
+      await api(`/api/admin/projects/${project.id}/access`, {method:'PUT', body:{group_ids:[...chosen]}});
+      live.editing = false; await refresh();
+      message(chosen.size ? `${project.name}: 선택한 그룹과 관리자만 볼 수 있습니다.` : `${project.name}: 모든 멤버가 볼 수 있습니다.`);
+    } catch (error) { message(error.message); save.disabled = false; }
+  });
+}
+
+// Activity log (admin)
+const AUDIT_KIND = {'account-access':'계정·권한', content:'콘텐츠', 'orca-link':'Orca 연결', 'orca-access':'Orca 접속', security:'보안'};
+async function refreshAudit() {
+  const q = encodeURIComponent($('audit-search').value.trim()), kind = encodeURIComponent($('audit-kind').value);
+  const rows = await api(`/api/admin/audit?kind=${kind}&q=${q}&limit=200`);
+  const box = $('audit-list'); box.replaceChildren();
+  if (!rows.length) box.append(record('기록 없음', '조건에 맞는 활동 기록이 없습니다.', ''));
+  for (const r of rows) box.append(record(`${AUDIT_KIND[r.kind] || r.kind} · ${r.state}`, r.summary, new Date(r.created).toLocaleString()));
+}
+window.addEventListener('DOMContentLoaded', () => {
+  let t = null;
+  $('audit-search').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => refreshAudit().catch(e => message(e.message)), 300); });
+  $('audit-kind').addEventListener('change', () => refreshAudit().catch(e => message(e.message)));
+  $('audit-refresh').addEventListener('click', () => refreshAudit().catch(e => message(e.message)));
+});

@@ -50,6 +50,10 @@ const ERRORS = {
   'Link request already in progress': '같은 프로젝트나 폴더의 요청이 처리 중입니다.',
   'Orca link not found': 'Orca 연결을 찾을 수 없습니다.',
   'Recipient is blocked': '차단된 멤버에게는 보낼 수 없습니다.',
+  'Only the uploader or an administrator': '올린 사람이나 관리자만 삭제할 수 있습니다.',
+  'Only the sender': '보낸 사람만 할 수 있습니다.',
+  'Message not found': '메시지를 찾을 수 없습니다.',
+  'Message already deleted': '이미 삭제된 메시지입니다.',
   'Too many messages': '메시지를 너무 빨리 보내고 있습니다. 잠시 후 다시 보내세요.',
   'User not found': '계정을 찾을 수 없습니다. 새로고침하세요.',
   'Project not found': '프로젝트를 찾을 수 없습니다. 새로고침하세요.',
@@ -66,7 +70,7 @@ const ROLE_NAME = {admin:'관리자', member:'멤버', viewer:'게스트(조회)
 function applySession(session) {
   currentUser = session; csrf = session.csrf; $('identity').textContent = `${session.username} · ${ROLE_NAME[session.role] || session.role}`;
   const isAdmin = session.role === 'admin';
-  for (const id of ['admin-tools','account-tools','operations-tools','orca-tools','group-tools']) $(id).hidden = !isAdmin;
+  for (const id of ['admin-tools','account-tools','operations-tools','orca-tools','group-tools','audit-tools']) $(id).hidden = !isAdmin;
   document.querySelectorAll('.admin-only').forEach(el => { el.hidden = !isAdmin; });
   for (const id of ['project-form','note-form','upload-form']) $(id).hidden = session.role === 'viewer';
   $('logout').hidden = false;
@@ -84,14 +88,15 @@ async function enter(session) {
   showView(location.hash.slice(1) || 'home', false);
   await refresh(); await chatStart();
 }
-const VIEWS = ['home','chat','projects','notes','files','history','account','guide','members','groups','orca','operations','server'];
+const VIEWS = ['home','chat','projects','notes','files','history','account','guide','members','groups','orca','audit','operations','server'];
 function showView(name, push = true) {
   if (!VIEWS.includes(name)) name = 'home';
-  const adminView = ['members','groups','orca','operations','server'].includes(name);
+  const adminView = ['members','groups','orca','audit','operations','server'].includes(name);
   if (adminView && currentUser?.role !== 'admin') name = 'home';
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.dataset.view === name));
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === name));
   if (push && location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+  if (name === 'audit' && typeof refreshAudit === 'function') refreshAudit().catch(e => message(e.message));
 }
 function record(title, body, meta) {
   const node = document.createElement('article'); node.className = 'record';
@@ -113,9 +118,20 @@ async function files() {
   const id = $('upload-project').value; $('files').replaceChildren();
   if (!id) return;
   for (const file of await api(`/api/projects/${id}/attachments`)) {
-    const node = record(file.name, `${file.size} bytes`, '');
+    const node = record(file.name, `${file.size} bytes`, file.uploaded_by ? `올린 사람 ${file.uploaded_by}` : '');
     const link = document.createElement('a'); link.href = `/api/attachments/${file.id}`;
-    link.textContent = '다운로드'; node.append(link); $('files').append(node);
+    link.textContent = '다운로드'; node.append(link);
+    if (currentUser && (currentUser.role === 'admin' || (file.uploaded_by && file.uploaded_by === currentUser.username))) {
+      const del = document.createElement('button'); del.className = 'danger small'; del.textContent = '삭제';
+      del.addEventListener('click', async () => {
+        if (!window.confirm(`${file.name} 파일을 삭제할까요? 되돌릴 수 없습니다.`)) return;
+        del.disabled = true;
+        try { await api(`/api/attachments/${file.id}`, {method:'DELETE'}); await files(); message('파일을 삭제했습니다.'); }
+        catch (error) { message(error.message); del.disabled = false; }
+      });
+      node.append(' ', del);
+    }
+    $('files').append(node);
   }
 }
 async function refresh() {
@@ -135,6 +151,7 @@ async function refresh() {
   }
   const projectNode = (p) => {
     const node = record(p.name, p.description, new Date(p.created).toLocaleString());
+    if (p.access_groups?.length) { const chips = document.createElement('div'); for (const g of p.access_groups) { const c = document.createElement('span'); c.className = 'chip lock'; c.textContent = '공개: ' + g; chips.append(c); } node.append(chips); }
     if (!p.archived && p.orca_available && currentUser?.role !== 'viewer') {
       const button = document.createElement('button'); button.textContent = 'Orca에서 개발환경 열기';
       button.addEventListener('click', async () => {
@@ -159,6 +176,11 @@ async function refresh() {
         catch (error) { message(error.message); b.disabled = false; }
       });
       node.append(' ', b);
+      if (!p.archived && typeof openAccessEditor === 'function') {
+        const acc = document.createElement('button'); acc.className = 'secondary'; acc.textContent = '공개 범위';
+        acc.addEventListener('click', () => openAccessEditor(node, p));
+        node.append(' ', acc);
+      }
     }
     return node;
   };
@@ -272,7 +294,8 @@ async function livePoll() {
     if (prev) {
       if (now.board !== prev.board || now.events !== prev.events || Date.now() - live.lastFull > 60000) { live.lastFull = Date.now(); await refresh(); }
       else if (now.users !== prev.users && currentUser?.role === 'admin') await refreshAdmin();
-      if (now.chat !== prev.chat) await chatTick();
+      if (now.access !== prev.access && now.board === prev.board) { live.lastFull = Date.now(); await refresh(); }
+      if (now.chat !== prev.chat || now.access !== prev.access) await chatTick(now.chat.split('-')[2] !== prev.chat.split('-')[2]);
     } else live.lastFull = Date.now();
     if ($('message').dataset.offline) { message(''); delete $('message').dataset.offline; }
   } catch (error) {

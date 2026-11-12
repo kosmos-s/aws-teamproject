@@ -79,6 +79,8 @@ def install_team_routes(app, settings, authenticated):
     from .orca_admin import install_orca_admin_routes
     install_orca_admin_routes(app, admin)
     install_teamwork_routes(app, authenticated, admin)
+    from .extras import install_extra_routes
+    install_extra_routes(app, authenticated, admin)
 
     def audit(db, actor, summary):
         db.add(Event(kind="account-access", state="ok", created=datetime.now(timezone.utc).isoformat(), summary=f"{actor}: {summary}"))

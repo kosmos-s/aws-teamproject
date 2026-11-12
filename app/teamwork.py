@@ -92,6 +92,9 @@ def install_teamwork_routes(app, authenticated, admin):
         note = db.get(Note, note_id)
         if not note:
             raise HTTPException(404, "Note not found")
+        from .extras import can_see_project
+        if not can_see_project(db, user, note.project_id):
+            raise HTTPException(404, "Note not found")
         if note.author != user["username"] and user["role"] != "admin":
             raise HTTPException(403, "Only the author or an administrator")
         return note
@@ -189,6 +192,12 @@ def install_teamwork_routes(app, authenticated, admin):
                 raise HTTPException(404, "Group not found")
             name = g.name
             db.execute(delete(GroupMember).where(GroupMember.group_id == group_id))
+            from .extras import forget_group_access
+            forget_group_access(db, group_id)
+            from .models import ChatEdit
+            gids = list(db.scalars(select(ChatMessage.id).where(ChatMessage.room == f"g{group_id}")))
+            if gids:
+                db.execute(delete(ChatEdit).where(ChatEdit.message_id.in_(gids)))
             db.execute(delete(ChatMessage).where(ChatMessage.room == f"g{group_id}"))
             db.execute(delete(ChatRead).where(ChatRead.room_key == f"g:{group_id}"))
             db.delete(g)

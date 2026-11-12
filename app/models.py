@@ -142,3 +142,27 @@ class UserActivity(Base):
     last_login = Column(String(40), nullable=True)
     last_seen = Column(String(40), nullable=True)
     must_change = Column(Integer, nullable=False, default=0)
+
+
+# --- 2026-11-12 additions (separate tables, no ALTER on live tables) ---
+class AttachmentOwner(Base):
+    """Who uploaded an attachment (uploads before this table existed have no row: admin-only delete)."""
+    __tablename__ = "attachment_owners"
+    attachment_id = Column(Integer, ForeignKey("attachments.id"), primary_key=True)
+    uploaded_by = Column(String(80), nullable=False)
+    uploaded_at = Column(String(40), nullable=False)
+
+
+class ChatEdit(Base):
+    """Edit/delete marker for a chat message. deleted=1 means the body was cleared."""
+    __tablename__ = "chat_edits"
+    message_id = Column(Integer, ForeignKey("chat_messages.id"), primary_key=True)
+    edited_at = Column(String(40), nullable=False)
+    deleted = Column(Integer, nullable=False, default=0)
+
+
+class ProjectAccess(Base):
+    """If a project has rows here, only members of these groups (and admins) can see it in the portal."""
+    __tablename__ = "project_access"
+    project_id = Column(Integer, ForeignKey("projects.id"), primary_key=True)
+    group_id = Column(Integer, ForeignKey("team_groups.id"), primary_key=True)

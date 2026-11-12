@@ -12,7 +12,8 @@ from sqlalchemy import select, func, or_, and_
 from sqlalchemy.orm import Session
 
 from .models import (User, BlockedUser, LoginSession, Project, Note, Attachment, Event,
-                     ChatMessage, ChatRead, TeamGroup, GroupMember, NoteEdit, ProjectArchive)
+                     ChatMessage, ChatRead, TeamGroup, GroupMember, NoteEdit, ProjectArchive, ChatEdit,
+                     AttachmentOwner, ProjectAccess)
 
 MAX_PAGE = 200
 
@@ -83,8 +84,14 @@ def install_collab_routes(app, authenticated):
         if not db.get(TeamGroup, gid) or not db.get(GroupMember, (gid, me.id)):
             raise HTTPException(404, "Group not found")
 
-    def serialize(m, uid):
-        return {"id": m.id, "sender": m.sender_name, "mine": m.sender_id == uid, "body": m.body, "created": m.created}
+    def serialize(m, uid, edits=None):
+        e = (edits or {}).get(m.id)
+        return {"id": m.id, "sender": m.sender_name, "mine": m.sender_id == uid, "body": m.body, "created": m.created,
+                "edited": e.edited_at if e and not e.deleted else None, "deleted": bool(e and e.deleted)}
+
+    def with_edits(db, rows):
+        ids = [m.id for m in rows]
+        return {e.message_id: e for e in db.scalars(select(ChatEdit).where(ChatEdit.message_id.in_(ids)))} if ids else {}
 
     @app.get("/api/changes")
     def changes(user=Depends(authenticated)):
@@ -95,11 +102,13 @@ def install_collab_routes(app, authenticated):
                 max_id(db, Project.id), max_id(db, Note.id), max_id(db, Attachment.id),
                 db.scalar(select(func.count(Project.id))) or 0, db.scalar(select(func.count(Attachment.id))) or 0,
                 db.scalar(select(func.count(Note.id))) or 0, db.scalar(select(func.max(NoteEdit.edited_at))) or "",
-                db.scalar(select(func.count(ProjectArchive.project_id))) or 0))
+                db.scalar(select(func.count(ProjectArchive.project_id))) or 0,
+                db.scalar(select(func.count(AttachmentOwner.attachment_id))) or 0))
             dm_unread = db.scalar(select(func.count(ChatMessage.id)).where(
                 ChatMessage.room == "dm", ChatMessage.recipient_id == uid)) or 0
             return {"board": board, "events": max_id(db, Event.id),
-                    "chat": f"{max_id(db, ChatMessage.id)}-{dm_unread}",
+                    "chat": f"{max_id(db, ChatMessage.id)}-{dm_unread}-{db.scalar(select(func.max(ChatEdit.edited_at))) or ''}",
+                    "access": f"{db.scalar(select(func.count(ProjectAccess.project_id))) or 0}-{db.scalar(select(func.count(GroupMember.user_id))) or 0}",
                     "users": db.scalar(select(func.count(User.id))) or 0}
 
     @app.get("/api/chat/people")
@@ -130,7 +139,8 @@ def install_collab_routes(app, authenticated):
             if rows:
                 mark_read(db, me.id, "main", rows[-1].id)
                 db.commit()
-            return [serialize(m, me.id) for m in rows]
+            edits = with_edits(db, rows)
+            return [serialize(m, me.id, edits) for m in rows]
 
     @app.post("/api/chat/main", status_code=201)
     def post_main(data: ChatInput, user=Depends(authenticated)):
@@ -155,7 +165,8 @@ def install_collab_routes(app, authenticated):
             if rows:
                 mark_read(db, me.id, f"g:{gid}", rows[-1].id)
                 db.commit()
-            return [serialize(m, me.id) for m in rows]
+            edits = with_edits(db, rows)
+            return [serialize(m, me.id, edits) for m in rows]
 
     @app.post("/api/chat/group/{gid}", status_code=201)
     def post_group(gid: int, data: ChatInput, user=Depends(authenticated)):
@@ -187,7 +198,8 @@ def install_collab_routes(app, authenticated):
             if rows:
                 mark_read(db, me.id, f"dm:{peer_id}", rows[-1].id)
                 db.commit()
-            return [serialize(m, me.id) for m in rows]
+            edits = with_edits(db, rows)
+            return [serialize(m, me.id, edits) for m in rows]
 
     @app.post("/api/chat/dm/{peer_id}", status_code=201)
     def post_dm(peer_id: int, data: ChatInput, user=Depends(authenticated)):
@@ -210,6 +222,10 @@ def forget_user_chat(db, user_id):
     """Called before deleting an account: drop its 1:1 chats and read marks, keep its main-room
     messages under the stored name so the team's history stays readable."""
     from sqlalchemy import delete, update
+    dm_ids = list(db.scalars(select(ChatMessage.id).where(ChatMessage.room == "dm",
+                  or_(ChatMessage.sender_id == user_id, ChatMessage.recipient_id == user_id))))
+    if dm_ids:
+        db.execute(delete(ChatEdit).where(ChatEdit.message_id.in_(dm_ids)))
     db.execute(delete(ChatMessage).where(ChatMessage.room == "dm",
                                          or_(ChatMessage.sender_id == user_id, ChatMessage.recipient_id == user_id)))
     db.execute(update(ChatMessage).where(ChatMessage.sender_id == user_id).values(sender_id=None))

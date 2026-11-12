@@ -27,6 +27,19 @@ class Storage:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(content)
 
+    def discard(self, key):
+        """Best-effort removal of an object (attachment deleted from the portal).
+        Returns False when the backend refuses (e.g. the EC2 role lacks s3:DeleteObject)."""
+        try:
+            path = self.path(key)
+            if self.client:
+                self.client.delete_object(Bucket=self.bucket, Key=key)
+            else:
+                path.unlink(missing_ok=True)
+            return True
+        except Exception:
+            return False
+
     def get(self, key, max_bytes=64 * 1024 * 1024):
         path = self.path(key)
         if self.client:

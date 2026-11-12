@@ -16,6 +16,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from .config import Settings
 from .models import Base, User, LoginSession, Project, Note, Attachment, Event, OrcaProject, BlockedUser, ProjectArchive, NoteEdit
 from .teamwork import activity, must_change as needs_password_change
+from .models import AttachmentOwner, ProjectAccess, TeamGroup
+from .extras import visible_project_ids, require_project, can_see_project
 from .security import verify_password, token_hash, password_hash
 from .storage import Storage
 
@@ -162,10 +164,16 @@ def create_app(settings=None):
     def projects(user=Depends(authenticated)):
         with Session(engine) as db:
             archived = {a.project_id: a for a in db.scalars(select(ProjectArchive))}
+            visible = visible_project_ids(db, user)
+            names = {g.id: g.name for g in db.scalars(select(TeamGroup))}
+            access = {}
+            for pa in db.scalars(select(ProjectAccess)):
+                access.setdefault(pa.project_id, []).append(names.get(pa.group_id, "?"))
             return [{"id": p.id, "name": p.name, "description": p.description, "created": p.created,
-                     "archived": p.id in archived,
+                     "archived": p.id in archived, "access_groups": sorted(access.get(p.id, [])),
                      "orca_available": db.get(OrcaProject, p.id) is not None,
-                     "repository_url": (db.get(OrcaProject, p.id).repository_url if db.get(OrcaProject, p.id) else None)} for p in db.scalars(select(Project).order_by(Project.id))]
+                     "repository_url": (db.get(OrcaProject, p.id).repository_url if db.get(OrcaProject, p.id) else None)}
+                    for p in db.scalars(select(Project).order_by(Project.id)) if visible is None or p.id in visible]
 
     @app.post("/api/projects", status_code=201)
     def add_project(data: ProjectInput, user=Depends(authenticated)):
@@ -179,14 +187,17 @@ def create_app(settings=None):
     def notes(user=Depends(authenticated)):
         with Session(engine) as db:
             edits = {e.note_id: e for e in db.scalars(select(NoteEdit))}
+            visible = visible_project_ids(db, user)
+            query = select(Note)
+            if visible is not None:
+                query = query.where(Note.project_id.in_(visible or {-1}))
             return [{"id": n.id, "project_id": n.project_id, "body": n.body, "author": n.author, "created": n.created,
-                     "edited": edits[n.id].edited_at if n.id in edits else None} for n in db.scalars(select(Note).order_by(Note.id.desc()).limit(100))]
+                     "edited": edits[n.id].edited_at if n.id in edits else None} for n in db.scalars(query.order_by(Note.id.desc()).limit(100))]
 
     @app.post("/api/projects/{project_id}/notes", status_code=201)
     def add_note(project_id: int, data: NoteInput, user=Depends(authenticated)):
         with Session(engine) as db:
-            if not db.get(Project, project_id):
-                raise HTTPException(404, "Project not found")
+            require_project(db, user, project_id)
             n = Note(project_id=project_id, body=data.body, author=user["username"], created=now())
             db.add(n)
             db.commit()
@@ -204,8 +215,7 @@ def create_app(settings=None):
         if len(content) > 1024 * 1024:
             raise HTTPException(413, "Maximum 1 MiB")
         with Session(engine) as db:
-            if not db.get(Project, project_id):
-                raise HTTPException(404, "Project not found")
+            require_project(db, user, project_id)
             key = "attachments/" + secrets.token_hex(16)
             try:
                 app.state.storage.put(key, content, media)
@@ -213,19 +223,24 @@ def create_app(settings=None):
                 raise HTTPException(503, "Storage unavailable")
             row = Attachment(project_id=project_id, name=name, key=key, media_type=media, size=len(content))
             db.add(row)
+            db.flush()
+            db.add(AttachmentOwner(attachment_id=row.id, uploaded_by=user["username"], uploaded_at=now()))
             db.commit()
             return {"id": row.id, "name": row.name}
 
     @app.get("/api/projects/{project_id}/attachments")
     def attachments(project_id: int, user=Depends(authenticated)):
         with Session(engine) as db:
-            return [{"id": a.id, "name": a.name, "size": a.size} for a in db.scalars(select(Attachment).where(Attachment.project_id == project_id))]
+            require_project(db, user, project_id)
+            owners = {o.attachment_id: o.uploaded_by for o in db.scalars(select(AttachmentOwner))}
+            return [{"id": a.id, "name": a.name, "size": a.size, "uploaded_by": owners.get(a.id)}
+                    for a in db.scalars(select(Attachment).where(Attachment.project_id == project_id))]
 
     @app.get("/api/attachments/{file_id}")
     def download(file_id: int, user=Depends(authenticated)):
         with Session(engine) as db:
             row = db.get(Attachment, file_id)
-            if not row:
+            if not row or not can_see_project(db, user, row.project_id):
                 raise HTTPException(404, "File not found")
             try:
                 content = app.state.storage.get(row.key)
@@ -236,7 +251,11 @@ def create_app(settings=None):
     @app.get("/api/events")
     def events(user=Depends(authenticated)):
         with Session(engine) as db:
-            return [{"id": e.id, "kind": e.kind, "state": e.state, "created": e.created, "summary": e.summary} for e in db.scalars(select(Event).order_by(Event.id.desc()).limit(100))]
+            query = select(Event)
+            if user["role"] != "admin":
+                # Account/content audit entries are for administrators (see /api/admin/audit).
+                query = query.where(Event.kind.in_(["monitor", "backup", "restore", "code-backup", "external-monitor"]))
+            return [{"id": e.id, "kind": e.kind, "state": e.state, "created": e.created, "summary": e.summary} for e in db.scalars(query.order_by(Event.id.desc()).limit(100))]
 
     @app.get("/api/status")
     def status(user=Depends(authenticated)):

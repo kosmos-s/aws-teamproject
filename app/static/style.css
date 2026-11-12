@@ -48,3 +48,10 @@ button.room.group-room small{color:#9fb6e6}
 @media(max-width:900px){.app{grid-template-columns:1fr}.sidebar{position:static;flex-direction:row;overflow-x:auto;padding:8px}.nav-label{display:none}.nav-item{white-space:nowrap}.grid.two,.inline-form{grid-template-columns:1fr}}
 .guide ol,.guide ul{margin:6px 0 10px;padding-left:20px;line-height:1.8;color:#c9d4ea;font-size:14px}.guide code{background:#1d2a4a;border-radius:5px;padding:1px 6px;font-size:12.5px}
 .member-row .who small{display:block}
+.chip.lock{background:#3a2d12;color:#ffd58a}
+button.small{padding:5px 10px;font-size:12px}
+.msg{position:relative}.msg.deleted p{color:#8090ad;font-style:italic}
+.msg-tools{display:none;gap:4px;margin-top:4px}.msg:hover .msg-tools,.msg:focus-within .msg-tools{display:flex}
+.msg-tools button{background:#0f1628;color:#c9d4ea;padding:3px 8px;font-size:11px;border-radius:6px}
+@media(max-width:600px){main{padding:0 12px}.panel{padding:16px}.metrics{gap:10px}.chat-log{max-height:55vh}.msg{max-width:92%}.msg-tools{display:flex}.member-row .secret input{min-width:0}header{height:64px}h1{font-size:26px}}
+#files .record small{display:block;margin-bottom:4px}#files .record a{margin-right:8px}

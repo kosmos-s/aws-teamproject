@@ -83,3 +83,9 @@ Orca의 내부 데이터베이스와 AI 자격증명은 이 DB에 포함하지 �
 - 브라우저는 3초마다 `/api/changes`(최대 id·개수 지문)를 확인하고 바뀐 부분만 다시 불러온다. 별도 WebSocket 서버나 Nginx 설정 변경이 없다.
 - 조회 전용(게스트) 계정도 채팅은 쓸 수 있다. 프로젝트·메모·첨부 쓰기는 계속 거절한다. 한 사용자당 10초에 20개를 넘는 메시지는 429로 거절한다.
 - 업무 데이터 논리 백업 범위에는 채팅이 포함되지 않는다.
+
+## 2026-11-12 추가 테이블
+- `attachment_owners(attachment_id PK·FK, uploaded_by, uploaded_at)` — 첨부 삭제 권한 판단. 이전 첨부는 행이 없어 관리자만 삭제.
+- `chat_edits(message_id PK·FK, edited_at, deleted)` — 채팅 수정·삭제 표시. 삭제 시 본문은 비운다.
+- `project_access(project_id PK·FK, group_id PK·FK)` — 행이 있으면 해당 그룹 멤버와 관리자만 프로젝트를 본다.
+- 2026-11-11 추가: `team_groups`, `group_members`, `user_activity`, `project_archives`, `note_edits`, `orca_link_requests`. 모두 기존 테이블을 `ALTER`하지 않는 별도 테이블이다.

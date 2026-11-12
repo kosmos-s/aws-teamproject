@@ -70,6 +70,8 @@ def install_orca_routes(app, settings, authenticated):
     @app.post("/api/projects/{project_id}/orca")
     def launch(project_id: int, user=Depends(authenticated)):
         with Session(engine) as db:
+            from .extras import require_project
+            require_project(db, user, project_id)
             mapping = db.get(OrcaProject, project_id)
             if not mapping:
                 raise HTTPException(409, "This project has no registered Orca workspace")
