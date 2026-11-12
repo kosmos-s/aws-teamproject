@@ -86,11 +86,43 @@ class CollabTests(unittest.TestCase):
         self.assertEqual(no_csrf.post("/api/chat/main", json={"body": "x"}).status_code, 403)
         no_csrf.close()
 
-    def test_chat_rate_limit(self):
-        amy = self.client("amy")
-        codes = [amy.post("/api/chat/main", json={"body": f"m{i}"}).status_code for i in range(21)]
-        self.assertEqual(codes[:20], [201] * 20)
-        self.assertEqual(codes[20], 429)
+    def test_chat_flood_protection(self):
+        from unittest import mock
+        import app.antispam as spam
+        amy, ben = self.client("amy"), self.client("ben")
+        codes = [amy.post("/api/chat/main", json={"body": f"m{i}"}).status_code for i in range(9)]
+        self.assertEqual(codes[:8], [201] * 8)                 # 8 per 5 s burst
+        r = amy.post("/api/chat/main", json={"body": "one more"})
+        self.assertEqual((r.status_code, r.json()["detail"]), (429, "Too many messages"))
+        self.assertTrue(1 <= int(r.headers["Retry-After"]) <= 6)
+        self.assertEqual(ben.post("/api/chat/main", json={"body": "다른 사람은 영향 없음"}).status_code, 201)
+        # same text a 3rd time within 30 s (outside the burst window)
+        later = spam.time.time() + 6
+        with mock.patch("app.antispam.time.time", return_value=later):
+            self.assertEqual(ben.post("/api/chat/main", json={"body": "도배"}).status_code, 201)
+            self.assertEqual(ben.post("/api/chat/main", json={"body": "  도배 "}).status_code, 201)
+            dup = ben.post("/api/chat/main", json={"body": "도배"})
+            self.assertEqual((dup.status_code, dup.json()["detail"]), (429, "Duplicate message"))
+        # files count too
+        with mock.patch("app.antispam.time.time", return_value=later):
+            for i in range(6):  # 2 texts above + 6 files = 8 in the burst window
+                ben.post("/api/chat/main/0/files", files={"file": (f"f{i}.txt", b"x", "text/plain")})
+            self.assertEqual(ben.post("/api/chat/main/0/files", files={"file": ("z.txt", b"x", "text/plain")}).status_code, 429)
+
+    def test_typing_indicator_scoped_to_room_members(self):
+        from unittest import mock
+        import app.collab as collab
+        amy, ben, gus = self.client("amy"), self.client("ben"), self.client("gus")
+        self.assertEqual(amy.post("/api/chat/typing", json={"room": "main"}).status_code, 200)
+        self.assertIn({"room": "main", "name": "amy"}, ben.get("/api/changes").json()["typing"])
+        self.assertEqual(amy.get("/api/changes").json()["typing"], [])           # not shown to myself
+        amy.post("/api/chat/typing", json={"room": f"u{self.uid('ben')}"})
+        self.assertIn({"room": f"u{self.uid('amy')}", "name": "amy"}, ben.get("/api/changes").json()["typing"])
+        self.assertNotIn("u", [t["room"][0] for t in gus.get("/api/changes").json()["typing"]])  # others' 1:1 hidden
+        self.assertEqual(amy.post("/api/chat/typing", json={"room": "g99"}).status_code, 404)
+        self.assertEqual(amy.post("/api/chat/typing", json={"room": "x; drop"}).status_code, 422)
+        with mock.patch("app.collab.time.time", return_value=collab.time.time() + 10):
+            self.assertEqual(ben.get("/api/changes").json()["typing"], [])       # expires after 6 s
 
     def test_blocked_user_hidden_and_cannot_receive_dm(self):
         boss, amy = self.client("boss"), self.client("amy")

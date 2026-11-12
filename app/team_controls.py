@@ -81,6 +81,8 @@ def install_team_routes(app, settings, authenticated):
     install_teamwork_routes(app, authenticated, admin)
     from .extras import install_extra_routes
     install_extra_routes(app, authenticated, admin)
+    from .suite import install_suite_routes
+    install_suite_routes(app, authenticated, admin)
 
     def audit(db, actor, summary):
         db.add(Event(kind="account-access", state="ok", created=datetime.now(timezone.utc).isoformat(), summary=f"{actor}: {summary}"))
@@ -93,10 +95,12 @@ def install_team_routes(app, settings, authenticated):
             for uid in db.scalars(select(LoginSession.user_id).where(LoginSession.expires > time.time())):
                 live[uid] = live.get(uid, 0) + 1
             acts = {a.user_id: a for a in db.scalars(select(UserActivity))}
+            from .models import UserTotp
+            totp = {t.user_id for t in db.scalars(select(UserTotp).where(UserTotp.enabled == 1))}
             return [{"id": u.id, "username": u.username, "role": u.role, "active": u.id not in blocked,
                      "sessions": live.get(u.id, 0), "last_login": acts[u.id].last_login if u.id in acts else None,
                      "must_change": bool(acts[u.id].must_change) if u.id in acts else False,
-                     "groups": [g.name for g in user_groups(db, u.id)]} for u in db.scalars(select(User).order_by(User.id))]
+                     "groups": [g.name for g in user_groups(db, u.id)], "totp": u.id in totp} for u in db.scalars(select(User).order_by(User.id))]
 
     @app.post("/api/admin/users", status_code=201)
     def add_user(data: NewUser, actor=Depends(admin)):
@@ -177,6 +181,8 @@ def install_team_routes(app, settings, authenticated):
             db.execute(delete(BlockedUser).where(BlockedUser.user_id == user_id))
             forget_user_chat(db, user_id)
             forget_user_teamwork(db, user_id)
+            from .suite import forget_user_suite
+            forget_user_suite(db, user_id)
             name = target.username
             db.delete(target)
             audit(db, actor["username"], f"deleted {name}; sessions revoked")

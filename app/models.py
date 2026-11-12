@@ -166,3 +166,68 @@ class ProjectAccess(Base):
     __tablename__ = "project_access"
     project_id = Column(Integer, ForeignKey("projects.id"), primary_key=True)
     group_id = Column(Integer, ForeignKey("team_groups.id"), primary_key=True)
+
+
+# --- 2026-11-12 collaboration suite (separate tables, no ALTER) ---
+class ChatAttachment(Base):
+    __tablename__ = "chat_attachments"
+    message_id = Column(Integer, ForeignKey("chat_messages.id"), primary_key=True)
+    key = Column(String(100), nullable=False)
+    name = Column(String(180), nullable=False)
+    media_type = Column(String(80), nullable=False)
+    size = Column(Integer, nullable=False)
+
+
+class ChatReply(Base):
+    __tablename__ = "chat_replies"
+    message_id = Column(Integer, ForeignKey("chat_messages.id"), primary_key=True)
+    reply_to = Column(Integer, ForeignKey("chat_messages.id"), nullable=False)
+
+
+class ChatReaction(Base):
+    __tablename__ = "chat_reactions"
+    message_id = Column(Integer, ForeignKey("chat_messages.id"), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    emoji = Column(String(16), primary_key=True)
+    created = Column(String(40), nullable=False)
+
+
+class ChatPin(Base):
+    """One pinned message per room ('main', 'g<id>', 'dm:<a>-<b>')."""
+    __tablename__ = "chat_pins"
+    room_key = Column(String(40), primary_key=True)
+    message_id = Column(Integer, ForeignKey("chat_messages.id"), nullable=False)
+    pinned_by = Column(String(80), nullable=False)
+    pinned_at = Column(String(40), nullable=False)
+
+
+class Task(Base):
+    """Kanban card for a project: todo / doing / done."""
+    __tablename__ = "tasks"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    status = Column(String(10), nullable=False, default="todo")
+    assignee = Column(String(80), nullable=True)
+    due = Column(String(10), nullable=True)  # YYYY-MM-DD
+    created_by = Column(String(80), nullable=False)
+    created = Column(String(40), nullable=False)
+    updated = Column(String(40), nullable=False)
+
+
+class Profile(Base):
+    __tablename__ = "profiles"
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    display_name = Column(String(40), nullable=False, default="")
+    team = Column(String(60), nullable=False, default="")
+    photo_key = Column(String(100), nullable=True)
+    updated = Column(String(40), nullable=False)
+
+
+class UserTotp(Base):
+    """TOTP second factor. enabled=0 while the user is still setting it up."""
+    __tablename__ = "user_totp"
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    secret = Column(String(64), nullable=False)
+    enabled = Column(Integer, nullable=False, default=0)
+    created = Column(String(40), nullable=False)

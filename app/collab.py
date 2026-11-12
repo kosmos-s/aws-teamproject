@@ -6,6 +6,8 @@ long-lived connections, and each poll is a handful of indexed MAX/COUNT queries.
 import time
 from datetime import datetime, timezone
 
+from typing import Optional
+
 from fastapi import Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, func, or_, and_
@@ -13,13 +15,19 @@ from sqlalchemy.orm import Session
 
 from .models import (User, BlockedUser, LoginSession, Project, Note, Attachment, Event,
                      ChatMessage, ChatRead, TeamGroup, GroupMember, NoteEdit, ProjectArchive, ChatEdit,
-                     AttachmentOwner, ProjectAccess)
+                     AttachmentOwner, ProjectAccess, ChatReaction, ChatPin, ChatReply, Task, Profile)
+from .suite import extras_for, extra_fields, purge_messages
 
 MAX_PAGE = 200
 
 
+class TypingInput(BaseModel):
+    room: str = Field(max_length=20, pattern=r"^(main|g\d{1,9}|u\d{1,9})$")
+
+
 class ChatInput(BaseModel):
     body: str = Field(min_length=1, max_length=2000)
+    reply_to: Optional[int] = None
 
     @field_validator("body")
     @classmethod
@@ -39,13 +47,62 @@ def install_collab_routes(app, authenticated):
             raise HTTPException(401, "Login required")
         return row
 
-    def throttle(user_id):
-        # 20 messages per 10 seconds per user is plenty for people, stops runaway scripts.
-        now = time.time()
-        recent = [t for t in recent_posts.get(user_id, []) if now - t < 10]
-        if len(recent) >= 20:
-            raise HTTPException(429, "Too many messages")
-        recent_posts[user_id] = recent + [now]
+    from .antispam import AntiSpam
+    app.state.antispam = getattr(app.state, "antispam", None) or AntiSpam()
+
+    def throttle(user_id, text=""):
+        app.state.antispam.check(user_id, text)
+
+    # "OO님이 입력 중…": in-memory, single worker. canonical key -> {user_id: (name, ts)}
+    typing = {}
+    TYPING_TTL = 6
+
+    def canonical_room(db, me, room):
+        if room == "main":
+            return "main"
+        if room.startswith("g"):
+            gid = int(room[1:])
+            if not db.get(GroupMember, (gid, me.id)):
+                raise HTTPException(404, "Group not found")
+            return room
+        peer = int(room[1:])
+        if not db.get(User, peer) or peer == me.id:
+            raise HTTPException(404, "User not found")
+        a, b = sorted([me.id, peer])
+        return f"dm:{a}-{b}"
+
+    def typing_for(db, me):
+        """Active typers in rooms I can see, keyed by MY room key ('main', 'g<id>', 'u<peer>')."""
+        now_t = time.time(); out = []
+        my_groups = None
+        for key, people in list(typing.items()):
+            for uid, (name, ts) in list(people.items()):
+                if now_t - ts > TYPING_TTL:
+                    people.pop(uid, None); continue
+                if uid == me.id:
+                    continue
+                if key == "main":
+                    out.append({"room": "main", "name": name})
+                elif key.startswith("g"):
+                    if my_groups is None:
+                        my_groups = set(db.scalars(select(GroupMember.group_id).where(GroupMember.user_id == me.id)))
+                    if int(key[1:]) in my_groups:
+                        out.append({"room": key, "name": name})
+                else:
+                    a, b = (int(x) for x in key[3:].split("-"))
+                    if me.id in (a, b):
+                        out.append({"room": f"u{uid}", "name": name})
+            if not people:
+                typing.pop(key, None)
+        return out
+
+    @app.post("/api/chat/typing")
+    def chat_typing(data: TypingInput, user=Depends(authenticated)):
+        with Session(engine) as db:
+            me = me_row(db, user)
+            key = canonical_room(db, me, data.room)
+            typing.setdefault(key, {})[me.id] = (me.username, time.time())
+            return {"ok": True}
 
     def max_id(db, column, *where):
         return db.scalar(select(func.max(column)).where(*where)) or 0
@@ -87,14 +144,23 @@ def install_collab_routes(app, authenticated):
         if not db.get(TeamGroup, gid) or not db.get(GroupMember, (gid, me.id)):
             raise HTTPException(404, "Group not found")
 
-    def serialize(m, uid, edits=None, readers=None):
+    def attach_reply(db, m, reply_to):
+        if not reply_to:
+            return
+        q = db.get(ChatMessage, reply_to)
+        same = q is not None and q.room == m.room and (m.room != "dm" or {q.sender_id, q.recipient_id} == {m.sender_id, m.recipient_id})
+        if not same:
+            raise HTTPException(404, "Message not found")
+        db.add(ChatReply(message_id=m.id, reply_to=reply_to))
+
+    def serialize(m, uid, edits=None, readers=None, extras=None):
         e = (edits or {}).get(m.id)
         unread_by = 0
         if readers is not None:
             unread_by = sum(1 for pid, last in readers.items() if pid != m.sender_id and last < m.id)
         return {"id": m.id, "sender": m.sender_name, "mine": m.sender_id == uid, "body": m.body, "created": m.created,
                 "edited": e.edited_at if e and not e.deleted else None, "deleted": bool(e and e.deleted),
-                "unread_by": unread_by}
+                "unread_by": unread_by, **extra_fields(m, uid, extras)}
 
     def room_readers(db, participants, key_for):
         """participant user_id -> last read message id in this room."""
@@ -118,13 +184,15 @@ def install_collab_routes(app, authenticated):
                 db.scalar(select(func.count(Project.id))) or 0, db.scalar(select(func.count(Attachment.id))) or 0,
                 db.scalar(select(func.count(Note.id))) or 0, db.scalar(select(func.max(NoteEdit.edited_at))) or "",
                 db.scalar(select(func.count(ProjectArchive.project_id))) or 0,
-                db.scalar(select(func.count(AttachmentOwner.attachment_id))) or 0))
+                db.scalar(select(func.count(AttachmentOwner.attachment_id))) or 0,
+                db.scalar(select(func.count(Task.id))) or 0, db.scalar(select(func.max(Task.updated))) or ""))
             dm_unread = db.scalar(select(func.count(ChatMessage.id)).where(
                 ChatMessage.room == "dm", ChatMessage.recipient_id == uid)) or 0
             return {"board": board, "events": max_id(db, Event.id),
-                    "chat": f"{max_id(db, ChatMessage.id)}|{dm_unread}|{db.scalar(select(func.max(ChatEdit.edited_at))) or ''}|{db.scalar(select(func.sum(ChatRead.last_id))) or 0}",
+                    "chat": f"{max_id(db, ChatMessage.id)}|{dm_unread}|{db.scalar(select(func.max(ChatEdit.edited_at))) or ''}|{db.scalar(select(func.sum(ChatRead.last_id))) or 0}|{db.scalar(select(func.count(ChatReaction.emoji))) or 0}|{db.scalar(select(func.max(ChatPin.pinned_at))) or ''}-{db.scalar(select(func.count(ChatPin.room_key))) or 0}",
                     "access": f"{db.scalar(select(func.count(ProjectAccess.project_id))) or 0}-{db.scalar(select(func.count(GroupMember.user_id))) or 0}",
-                    "users": db.scalar(select(func.count(User.id))) or 0}
+                    "users": f"{db.scalar(select(func.count(User.id))) or 0}|{db.scalar(select(func.max(Profile.updated))) or ''}",
+                    "typing": typing_for(db, me_row(db, user))}
 
     @app.get("/api/chat/people")
     def people(user=Depends(authenticated)):
@@ -155,20 +223,22 @@ def install_collab_routes(app, authenticated):
                 mark_read(db, me.id, "main", rows[-1].id)
                 db.commit()
             edits = with_edits(db, rows)
+            extras = extras_for(db, rows)
             blocked = set(db.scalars(select(BlockedUser.user_id)))
             people = [u for u in db.scalars(select(User.id)) if u not in blocked]
             readers = room_readers(db, people, lambda pid: "main")
-            return [serialize(m, me.id, edits, readers) for m in rows]
+            return [serialize(m, me.id, edits, readers, extras) for m in rows]
 
     @app.post("/api/chat/main", status_code=201)
     def post_main(data: ChatInput, user=Depends(authenticated)):
         with Session(engine) as db:
             me = me_row(db, user)
-            throttle(me.id)
+            throttle(me.id, data.body)
             m = ChatMessage(room="main", sender_id=me.id, sender_name=me.username, body=data.body,
                             created=datetime.now(timezone.utc).isoformat())
             db.add(m)
             db.flush()
+            attach_reply(db, m, data.reply_to)
             mark_read(db, me.id, "main", m.id)
             db.commit()
             return serialize(m, me.id)
@@ -184,20 +254,22 @@ def install_collab_routes(app, authenticated):
                 mark_read(db, me.id, f"g:{gid}", rows[-1].id)
                 db.commit()
             edits = with_edits(db, rows)
+            extras = extras_for(db, rows)
             members = list(db.scalars(select(GroupMember.user_id).where(GroupMember.group_id == gid)))
             readers = room_readers(db, members, lambda pid: f"g:{gid}")
-            return [serialize(m, me.id, edits, readers) for m in rows]
+            return [serialize(m, me.id, edits, readers, extras) for m in rows]
 
     @app.post("/api/chat/group/{gid}", status_code=201)
     def post_group(gid: int, data: ChatInput, user=Depends(authenticated)):
         with Session(engine) as db:
             me = me_row(db, user)
             member_group_or_404(db, gid, me)
-            throttle(me.id)
+            throttle(me.id, data.body)
             m = ChatMessage(room=f"g{gid}", sender_id=me.id, sender_name=me.username, body=data.body,
                             created=datetime.now(timezone.utc).isoformat())
             db.add(m)
             db.flush()
+            attach_reply(db, m, data.reply_to)
             mark_read(db, me.id, f"g:{gid}", m.id)
             db.commit()
             return serialize(m, me.id)
@@ -219,8 +291,9 @@ def install_collab_routes(app, authenticated):
                 mark_read(db, me.id, f"dm:{peer_id}", rows[-1].id)
                 db.commit()
             edits = with_edits(db, rows)
+            extras = extras_for(db, rows)
             readers = room_readers(db, [me.id, peer_id], lambda pid: f"dm:{peer_id if pid == me.id else me.id}")
-            return [serialize(m, me.id, edits, readers) for m in rows]
+            return [serialize(m, me.id, edits, readers, extras) for m in rows]
 
     @app.post("/api/chat/dm/{peer_id}", status_code=201)
     def post_dm(peer_id: int, data: ChatInput, user=Depends(authenticated)):
@@ -229,11 +302,12 @@ def install_collab_routes(app, authenticated):
             peer = peer_or_404(db, peer_id, me)
             if db.get(BlockedUser, peer.id):
                 raise HTTPException(409, "Recipient is blocked")
-            throttle(me.id)
+            throttle(me.id, data.body)
             m = ChatMessage(room="dm", sender_id=me.id, sender_name=me.username, recipient_id=peer.id,
                             body=data.body, created=datetime.now(timezone.utc).isoformat())
             db.add(m)
             db.flush()
+            attach_reply(db, m, data.reply_to)
             mark_read(db, me.id, f"dm:{peer.id}", m.id)
             db.commit()
             return serialize(m, me.id)
@@ -245,8 +319,7 @@ def forget_user_chat(db, user_id):
     from sqlalchemy import delete, update
     dm_ids = list(db.scalars(select(ChatMessage.id).where(ChatMessage.room == "dm",
                   or_(ChatMessage.sender_id == user_id, ChatMessage.recipient_id == user_id))))
-    if dm_ids:
-        db.execute(delete(ChatEdit).where(ChatEdit.message_id.in_(dm_ids)))
+    purge_messages(db, dm_ids)
     db.execute(delete(ChatMessage).where(ChatMessage.room == "dm",
                                          or_(ChatMessage.sender_id == user_id, ChatMessage.recipient_id == user_id)))
     db.execute(update(ChatMessage).where(ChatMessage.sender_id == user_id).values(sender_id=None))

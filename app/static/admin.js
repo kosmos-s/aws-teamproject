@@ -37,6 +37,7 @@ function memberRow(user) {
   last.textContent = user.last_login ? `마지막 로그인 ${new Date(user.last_login).toLocaleString()}` : '로그인 기록 없음';
   who.append(name, state, last);
   if (user.must_change) { const w = document.createElement('small'); w.className = 'badge-warn'; w.textContent = '첫 로그인 전 (비밀번호 변경 대기)'; who.append(w); }
+  if (user.totp) { const k = document.createElement('small'); k.className = 'ok-text'; k.textContent = '🔐 2단계 인증 사용 중'; who.append(k); }
   if (user.groups?.length) { const g = document.createElement('div'); for (const n of user.groups) { const c = document.createElement('span'); c.className = 'chip'; c.textContent = n; g.append(c); } who.append(g); }
 
   const role = document.createElement('select'); role.setAttribute('aria-label', user.username + ' 역할');
@@ -75,6 +76,11 @@ function memberRow(user) {
     catch (error) { message(error.message); remove.disabled = false; }
   });
   const secret = document.createElement('div'); secret.className = 'secret'; secret.append(pw, reset, remove);
+  if (user.totp) {
+    const otp = document.createElement('button'); otp.className = 'secondary'; otp.textContent = '2FA 초기화'; otp.title = '휴대폰을 잃어버린 멤버의 2단계 인증을 끕니다';
+    otp.addEventListener('click', async () => { if (!window.confirm(`${user.username}의 2단계 인증을 초기화할까요?`)) return; try { await api(`/api/admin/users/${user.id}/totp`, {method:'DELETE'}); await refreshAdmin(); message(`${user.username}의 2단계 인증을 초기화했습니다.`); } catch (e) { message(e.message); } });
+    secret.append(otp);
+  }
   row.append(secret);
   return row;
 }
