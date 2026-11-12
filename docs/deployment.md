@@ -1,6 +1,6 @@
 # 배포 기록과 재접속
 
-작업일: 2026-11-10 KST. 계정 식별자와 인스턴스 ID는 Git에서 제외한 `.local/deployment.json`에만 보관한다.
+작업일: 2026-11-10 KST. 계정 식별자와 인스턴스 ID는 Git에서 제외한 운영자 전용 상태 파일에만 보관한다.
 
 ## 소프트웨어
 - Ubuntu Server 24.04 LTS, x86_64, Canonical 공식 AMI.
@@ -49,7 +49,7 @@ Orca 서비스 활성, 브라우저 사용, 실제 AI 요청, 3인 접속, 재�
 공개 진입 경로는 80/443이며 80은 HTTPS로 리다이렉트한다. Orca 6768과 SSH 인바운드는 열지 않았다.
 `app/`, `requirements.lock`, `deploy/portal-install.sh`와 systemd 단위는 `/opt/kosmos-portal`에 배포했다. 별도 비관리자 kosmos-portal 사용자와 loopback 8000을 사용한다.
 `/etc/kosmos-portal.env`는 root 0600이며 systemd EnvironmentFile로 읽는다. URL에 & 등이 포함되므로 이 파일을 셸 source로 실행하지 않는다.
-승인된 첫 RDS/S3 생성 코드는 `scripts/provision-portal.py`. 실행 전 기존 .local/portal-cloud.json과 AWS 자원을 반드시 확인한다. 부분 생성 후 무작정 재실행하지 않는다.
+승인된 첫 RDS/S3 생성 코드는 `scripts/provision-portal.py`. 실행 전 기존 운영자 전용 상태 파일과 AWS 자원을 반드시 확인한다. 부분 생성 후 무작정 재실행하지 않는다.
 서버 초기 설정은 `deploy/portal-configure.py`, 실제 데이터 검증은 `deploy/verify-portal.py`. 초기 설정은 새 DB 전용으로, 운영 중 반복 실행하지 않는다. DB 초기화용 SSM 읽기 권한은 설치 후 제거했다.
 Nginx 설정은 deploy/portal-nginx.conf의 도메인을 대체해 사용하고 Certbot으로 인증서를 적용했다. 최초 webroot 인증은 전환 시점의 challenge 경로 404로 실패했으며, 명시적 challenge 경로와 Nginx 플러그인 적용 후 발급·외부 HTTPS 검증에 성공했다.
 서비스 재시작 후 RDS·S3 유지와 별도 복구 검증을 재실행했다. 포털 계정 정보는 공개 Git에 올리지 않는다. 운영 명령과 복구는 docs/portal-operations.md를 따른다.
@@ -63,7 +63,7 @@ Nginx 설정은 deploy/portal-nginx.conf의 도메인을 대체해 사용하고 
 [팀 운영 절차](team-operations.md)에 적용 순서와 미적용 항목을 기록했다. 추가 유료 AWS 자원이나 알림 서비스를 생성하지 않았다. 로컬 구현·검증은 운영 배포/메일 발송/2FA 등록과 구분한다.
 
 ## 2026-11-11 배포 갱신
-사용자 승인에 따라 기존 EC2/RDS를 재가동하고 091ca9c 릴리스를 적용했다. DB 시작을 기다리는 동안 앱을 멈추고, RDS available 확인 뒤 테이블 반영과 서비스 시작을 수행했다. 초기 자원 생성 스크립트나 DB 초기화는 재실행하지 않았다. EIP 1개를 기존 EC2에 연결했고 DNS A 레코드 변경은 운영자에게 전달했다. EIP 상태/주소는 .local/elastic-ip.json에 보관한다. 재실행 전 이 파일과 AWS describe-addresses를 먼저 확인해 중복 할당하지 않는다.
+사용자 승인에 따라 기존 EC2/RDS를 재가동하고 091ca9c 릴리스를 적용했다. DB 시작을 기다리는 동안 앱을 멈추고, RDS available 확인 뒤 테이블 반영과 서비스 시작을 수행했다. 초기 자원 생성 스크립트나 DB 초기화는 재실행하지 않았다. EIP 1개를 기존 EC2에 연결했고 DNS A 레코드 변경은 운영자에게 전달했다. EIP 상태/주소는 운영자 전용 상태 파일에 보관한다. 재실행 전 이 파일과 AWS describe-addresses를 먼저 확인해 중복 할당하지 않는다.
 승인된 종료 시각은 2026-11-11 13:47:23 KST다. EC2/RDS 각각 AWS Scheduler와 서버 타이머를 확인했으며 운영 시간을 늘리지 않았다. DNS를 우회한 TLS 검증과 일반 DNS 접속 성공은 구분한다.
 
 ## 2026-11-11 강의 시연 추가 검증
@@ -84,3 +84,6 @@ app/templates/index.html, app/static/app.js, app/static/style.css만 체크섬 �
 ## 2026-11-11 오후 배포 방식 (핫 배포)
 변경된 파일만 묶어 SSM으로 보낸다. 서버의 기존 파일이 마지막 배포 커밋과 같은지 해시로 먼저 확인하고(다르면 중단), 백업 후 교체 → `python -c "import app.main"` → `systemctl restart kosmos-portal` → `/health` 확인. 실패하면 백업으로 자동 복구한다. 새 테이블은 포털 시작 시 `create_all`로 생기며 기존 테이블은 `ALTER` 하지 않는다.
 관리자 Orca 연결은 `deploy/kosmos-orca-link.service/.timer`(20초)가 `deploy/orca-link-worker.py`를 root로 실행해 처리한다. 웹은 요청만 기록한다.
+
+## 2026-11-12 개선안 배포 준비
+새 테이블 9개와 채팅 복합 인덱스 2개를 추가한다. 기존 파일과 LF 기준 체크섬을 먼저 비교하고 다른 사람의 원격 변경이 있으면 중단한다. 배포 전 코드 백업, 신규 릴리스 의존성 확인, 서비스 계정으로 키 생성/스키마 이전, 분리된 복구 검증, /health 및 HTTPS 인증 거부 확인을 수행한다. TOTP 이전 때문에 파일만 되돌리는 롤백은 허용하지 않는다. 세부 조건은 [개선안](review-hardening.md)의 롤백 절차를 따른다. 서버 배포·main 병합·AWS 변경은 현재 사용자의 별도 확인 후 진행한다.

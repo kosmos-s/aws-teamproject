@@ -21,6 +21,9 @@ from .models import AttachmentOwner, ProjectAccess, TeamGroup
 from .extras import visible_project_ids, require_project, can_see_project
 from .security import verify_password, token_hash, password_hash
 from .storage import Storage
+from .hardening import (initialize, session_policy, idle_seconds, LOGIN_LOCK, UPLOAD_LOCK,
+                        serialized, AttemptLimit, totp_secret, record_upload)
+from .models import SessionActivity, RecoveryCode, ProjectPolicy
 
 
 def now():
@@ -30,7 +33,7 @@ def now():
 class LoginInput(BaseModel):
     username: str = Field(max_length=80)
     password: str = Field(max_length=256)
-    otp: str = Field(default="", max_length=10)
+    otp: str = Field(default="", max_length=32)
 
 
 class ProjectInput(BaseModel):
@@ -56,14 +59,6 @@ class NoteInput(BaseModel):
         return value.strip()
 
 
-def settings_idle_seconds():
-    import os
-    try:
-        return max(5, int(os.getenv("IDLE_MINUTES", "30"))) * 60
-    except ValueError:
-        return 1800
-
-
 def create_app(settings=None):
     settings = settings or Settings.from_env()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -74,13 +69,14 @@ def create_app(settings=None):
     app.state.engine = engine
     app.state.settings = settings
     app.state.storage = Storage(settings)
+    app.state.totp_vault = initialize(engine, settings)
+    app.state.totp_limit = AttemptLimit()
+    from .changes import ChangeHub
+    app.state.changes = ChangeHub()
     failures = {}
     account_failures = {}  # per-username lockout, independent of client IP
     seen = {}  # user_id -> last time last_seen was written (throttle DB writes)
     replaced = {}  # token_hash -> time it was ended by a newer login of the same account
-    last_active = {}  # token_hash -> last user-initiated request (background polling does not count)
-    IDLE_LIMIT = settings_idle_seconds()
-    BACKGROUND = {"/api/wait", "/api/changes", "/api/status", "/api/events", "/api/chat/people", "/api/chat/typing"}
     FORCED_OK = {"/api/session", "/api/logout", "/api/account/password"}
     dummy_hash = password_hash("unmatched-dummy-password")
 
@@ -96,14 +92,45 @@ def create_app(settings=None):
         length = request.headers.get("content-length", "0")
         if not length.isdigit() or int(length) > 2 * 1024 * 1024:
             return JSONResponse({"detail": "Request too large"}, status_code=413)
+        target = None
+        if request.method in {"POST","PUT","PATCH","DELETE"}:
+            from .notices import notice_target
+            data = None
+            if request.url.path == '/api/tasks':
+                try: data=await request.json()
+                except ValueError: pass
+                if not isinstance(data,dict): data=None
+            target = await asyncio.to_thread(notice_target,engine,request.url.path,data)
         response = await call_next(request)
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and response.status_code < 400:
-            app.state.change_version += 1  # wakes every open /api/wait request
+            from .changes import publish_write
+            await asyncio.to_thread(publish_write,app,request.url.path,getattr(request.state,'user_id',None),getattr(request.state,'typing_room',None))
+            target = getattr(request.state,'notice_target',None) or target
+            if target and getattr(request.state,'username',None):
+                from .notices import record_notice
+                try:
+                    await asyncio.to_thread(record_notice,engine,target,request.state.username,request.method)
+                    app.state.changes.publish('board')
+                except SQLAlchemyError:
+                    import logging
+                    logging.getLogger('kosmos').error('Change notice could not be saved')
         response.headers.update({"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
                                  "Referrer-Policy": "same-origin", "Cache-Control": "no-store",
                                  "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"})
         if settings.secure_cookies:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        return response
+
+    @app.middleware("http")
+    async def request_identity(request, call_next):
+        identity = secrets.token_hex(8)
+        try:
+            response = await call_next(request)
+        except Exception:
+            import logging
+            logging.getLogger('kosmos').exception('request_id=%s', identity)
+            response = JSONResponse({'detail':'Internal error'}, status_code=500)
+        response.headers['X-Request-ID'] = identity
         return response
 
     @app.exception_handler(SQLAlchemyError)
@@ -119,16 +146,13 @@ def create_app(settings=None):
                 if hashed in replaced:
                     raise HTTPException(401, "Signed in elsewhere")
                 raise HTTPException(401, "Login required")
-            idle_since = last_active.setdefault(hashed, time.time())
-            if time.time() - idle_since > IDLE_LIMIT:
-                db.delete(row); db.commit(); last_active.pop(hashed, None)
+            user = session_policy(db, row)
+            if not user:
+                db.delete(row); db.commit()
                 raise HTTPException(401, "Session idle")
-            if request.url.path not in BACKGROUND:
-                last_active[hashed] = time.time()
-            user = db.get(User, row.user_id)
             if not user or db.get(BlockedUser, user.id):
                 raise HTTPException(401, "Login required")
-            if user.role == "viewer" and request.method not in {"GET", "HEAD"} and request.url.path != "/api/logout" and not request.url.path.startswith(("/api/chat/", "/api/account/")):
+            if user.role == "viewer" and request.method not in {"GET", "HEAD"} and request.url.path not in {"/api/logout","/api/activity","/api/notices/read"} and not request.url.path.startswith(("/api/chat/", "/api/account/")):
                 raise HTTPException(403, "Read-only account")
             if request.method not in {"GET", "HEAD"} and not secrets.compare_digest(request.headers.get("x-csrf-token", ""), row.csrf):
                 raise HTTPException(403, "CSRF rejected")
@@ -139,9 +163,13 @@ def create_app(settings=None):
                 seen[user.id] = time.time()
                 activity(db, user.id).last_seen = now()
                 db.commit()
-            return {"username": user.username, "role": user.role, "csrf": row.csrf, "must_change": forced}
+            request.state.user_id = user.id
+            request.state.username = user.username
+            return {"id":user.id,"username": user.username, "role": user.role, "csrf": row.csrf, "must_change": forced,
+                    "session_hash":hashed,"idle_seconds":idle_seconds()}
 
     @app.post("/api/login")
+    @serialized(LOGIN_LOCK)
     def login(data: LoginInput, request: Request):
         key = request.client.host if request.client else "unknown"
         recent = [t for t in failures.get(key, []) if time.time() - t < 300]
@@ -153,7 +181,7 @@ def create_app(settings=None):
             # Stops guessing one account from many IPs; checked before the password is tried.
             raise HTTPException(429, "Account temporarily locked")
         with Session(engine) as db:
-            user = db.scalar(select(User).where(User.username == data.username))
+            user = db.scalar(select(User).where(User.username == data.username).with_for_update())
             valid = verify_password(data.password, user.password_hash if user else dummy_hash)
             if not user or not valid or db.get(BlockedUser, user.id):
                 failures[key] = recent + [time.time()]
@@ -165,7 +193,10 @@ def create_app(settings=None):
             if second and second.enabled:
                 if not data.otp:
                     raise HTTPException(401, "OTP required")  # password was right; ask for the code
-                if not totp_verify(second.secret, data.otp):
+                recovery = db.get(RecoveryCode, (user.id, token_hash(data.otp)))
+                if recovery:
+                    db.delete(recovery)
+                elif not totp_verify(totp_secret(db, app.state.totp_vault, second), data.otp):
                     failures[key] = recent + [time.time()]
                     account_failures[account] = account_recent + [time.time()]
                     raise HTTPException(401, "Invalid OTP")
@@ -178,6 +209,7 @@ def create_app(settings=None):
                 db.execute(delete(LoginSession).where(LoginSession.token_hash.in_(ended)))
             token, csrf = secrets.token_urlsafe(32), secrets.token_hex(32)
             db.add(LoginSession(token_hash=token_hash(token), user_id=user.id, csrf=csrf, expires=time.time() + 28800))
+            db.add(SessionActivity(token_hash=token_hash(token), last_active=time.time()))
             act = activity(db, user.id)
             act.last_login = act.last_seen = now()
             db.commit()
@@ -193,18 +225,15 @@ def create_app(settings=None):
 
     # Long-poll: the browser holds one request open; any successful write in this (single-worker)
     # process bumps the version and answers it at once, so chat appears without a 3 s polling delay.
-    app.state.change_version = 0
 
     @app.get("/api/wait")
     async def wait_for_change(v: int = -1, user=Depends(authenticated)):
-        deadline = time.monotonic() + 25
-        while app.state.change_version == v and time.monotonic() < deadline:
-            await asyncio.sleep(0.2)
-        return {"v": app.state.change_version}
+        await app.state.changes.wait(user['id'],v)
+        return {"v": app.state.changes.version(user['id'])}
 
     @app.get("/api/session")
     def session(user=Depends(authenticated)):
-        return user
+        return {k:v for k,v in user.items() if k != 'session_hash'}
 
     @app.post("/api/logout")
     def logout(request: Request, user=Depends(authenticated)):
@@ -225,18 +254,22 @@ def create_app(settings=None):
             access = {}
             for pa in db.scalars(select(ProjectAccess)):
                 access.setdefault(pa.project_id, []).append(names.get(pa.group_id, "?"))
+            mappings = {o.project_id:o for o in db.scalars(select(OrcaProject))}
+            policies = {o.project_id:o.restricted for o in db.scalars(select(ProjectPolicy))}
             return [{"id": p.id, "name": p.name, "description": p.description, "created": p.created,
                      "archived": p.id in archived, "access_groups": sorted(access.get(p.id, [])),
-                     "orca_available": db.get(OrcaProject, p.id) is not None,
-                     "repository_url": (db.get(OrcaProject, p.id).repository_url if db.get(OrcaProject, p.id) else None)}
+                     "restricted":bool(access.get(p.id) or policies.get(p.id)),
+                     "orca_available": p.id in mappings,
+                     "repository_url": mappings[p.id].repository_url if p.id in mappings else None}
                     for p in db.scalars(select(Project).order_by(Project.id)) if visible is None or p.id in visible]
 
     @app.post("/api/projects", status_code=201)
-    def add_project(data: ProjectInput, user=Depends(authenticated)):
+    def add_project(data: ProjectInput, request:Request, user=Depends(authenticated)):
         with Session(engine) as db:
             p = Project(name=data.name, description=data.description, created=now())
             db.add(p)
             db.commit()
+            request.state.notice_target={'project_id':p.id,'kind':'projects','title':'프로젝트 추가','admin_only':0}
             return {"id": p.id, "name": p.name}
 
     @app.get("/api/notes")
@@ -260,6 +293,7 @@ def create_app(settings=None):
             return {"id": n.id}
 
     @app.post("/api/projects/{project_id}/attachments", status_code=201)
+    @serialized(UPLOAD_LOCK)
     def upload(project_id: int, file: UploadFile = File(...), user=Depends(authenticated)):
         allowed = {".txt": "text/plain", ".png": "image/png", ".jpg": "image/jpeg", ".pdf": "application/pdf"}
         name = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
@@ -273,6 +307,7 @@ def create_app(settings=None):
         with Session(engine) as db:
             require_project(db, user, project_id)
             key = "attachments/" + secrets.token_hex(16)
+            record_upload(db,key,user['username'],f'project:{project_id}',len(content))
             try:
                 app.state.storage.put(key, content, media)
             except Exception:
@@ -342,4 +377,11 @@ def create_app(settings=None):
     install_collab_routes(app, authenticated)
     from .team_controls import install_team_routes
     install_team_routes(app, settings, authenticated)
+    from .hardening import install_routes
+    def hardening_admin(user=Depends(authenticated)):
+        if user['role'] != 'admin': raise HTTPException(403,'Administrator required')
+        return user
+    install_routes(app, authenticated, hardening_admin)
+    from .notices import install_routes as install_notices
+    install_notices(app,authenticated,hardening_admin)
     return app

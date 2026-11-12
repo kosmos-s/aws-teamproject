@@ -119,7 +119,7 @@ class SuiteTests(unittest.TestCase):
 
     def test_totp_login_flow(self):
         boss = self.client("boss")
-        secret = boss.post("/api/account/totp/setup").json()["secret"]
+        secret = boss.post("/api/account/totp/setup", json={"password": PW}).json()["secret"]
         self.assertEqual(boss.post("/api/account/totp/enable", json={"code": "000000"}).status_code, 403)
         self.assertEqual(boss.post("/api/account/totp/enable", json={"code": totp_code(secret)}).status_code, 200)
         self.assertTrue(boss.get("/api/account/totp").json()["enabled"])
@@ -135,11 +135,11 @@ class SuiteTests(unittest.TestCase):
 
     def test_admin_resets_member_totp(self):
         amy = self.client("amy")
-        secret = amy.post("/api/account/totp/setup").json()["secret"]
+        secret = amy.post("/api/account/totp/setup", json={"password": PW}).json()["secret"]
         amy.post("/api/account/totp/enable", json={"code": totp_code(secret)})
         self.clients.pop("amy").close()
         boss = self.client("boss")
-        self.assertEqual(boss.delete(f"/api/admin/users/{self.uid('amy')}/totp").status_code, 200)
+        self.assertEqual(boss.request("DELETE",f"/api/admin/users/{self.uid('amy')}/totp",json={"password":PW}).status_code, 200)
         self.assertEqual(self.client("amy").get("/api/account/totp").json()["enabled"], False)
 
     def test_idle_session_logs_out(self):

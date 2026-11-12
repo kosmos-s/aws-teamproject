@@ -51,3 +51,6 @@
 점검·백업 이력은 대시보드 맨 아래에 있으며 기본 최근 3개, 펼치면 조회된 최근 최대 100개를 볼 수 있다.
 
 발표 자료는 과제 공지 기준 23장·20분 계획으로 다시 작성했다. 최신 [발표 대본](docs/presentation-script.md)과 [공지 대비 검토](docs/assignment-audit.md)를 따른다. 담당 업무·개인별 기여·발표 구간은 사용자 확인 결과 미정이다.
+
+## 2026-11-12 보안·변경사항 개선
+[개선 동작과 백업 v3](docs/review-hardening.md), [현재 35개 테이블 모델](docs/data-model.md), [협업 도구 비교와 후속 후보](docs/product-comparison.md)를 참고한다. 로컬 구현과 실제 배포 상태는 STATUS.md에서 구분한다.

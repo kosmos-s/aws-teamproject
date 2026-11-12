@@ -7,7 +7,7 @@ from sqlalchemy import select, delete, or_
 from sqlalchemy.orm import Session
 
 from .models import (Attachment, AttachmentOwner, ChatMessage, ChatEdit, Event, GroupMember, Project,
-                     ProjectAccess, TeamGroup, User)
+                     ProjectAccess, ProjectPolicy, TeamGroup, User, ChatAttachment)
 
 AUDIT_KINDS = {"account-access", "content", "orca-link", "orca-access", "security"}
 
@@ -21,6 +21,8 @@ def visible_project_ids(db, user):
     restricted = {}
     for pa in db.scalars(select(ProjectAccess)):
         restricted.setdefault(pa.project_id, set()).add(pa.group_id)
+    for pid in db.scalars(select(ProjectPolicy.project_id).where(ProjectPolicy.restricted == 1)):
+        restricted.setdefault(pid, set())
     if not restricted or user.get("role") == "admin":
         return None
     me = db.scalar(select(User.id).where(User.username == user["username"]))
@@ -54,6 +56,7 @@ class ChatUpdate(BaseModel):
 
 class AccessInput(BaseModel):
     group_ids: list[int] = Field(default_factory=list, max_length=200)
+    restricted: bool | None = None
 
 
 def install_extra_routes(app, authenticated, admin):
@@ -73,11 +76,14 @@ def install_extra_routes(app, authenticated, admin):
             if user["role"] != "admin" and (not owner or owner.uploaded_by != user["username"]):
                 raise HTTPException(403, "Only the uploader or an administrator")
             key, name = row.key, row.name
+            from .hardening import queue_delete
+            queue_delete(db, key)
             db.execute(delete(AttachmentOwner).where(AttachmentOwner.attachment_id == file_id))
             db.delete(row)
             audit(db, user["username"], "content", f"deleted attachment {name}")
             db.commit()
-        app.state.storage.discard(key)  # best effort; the DB row is already gone
+        from .hardening import drain_deletions
+        drain_deletions(engine, app.state.storage)
         return {"ok": True}
 
     # ---- chat: sender edits/deletes own message, admin may delete any -------------
@@ -109,6 +115,11 @@ def install_extra_routes(app, authenticated, admin):
     def delete_message(message_id: int, user=Depends(authenticated)):
         with Session(engine) as db:
             m, edit = own_message(db, message_id, user, allow_admin=True)
+            f = db.get(ChatAttachment, message_id)
+            if f:
+                from .hardening import queue_delete
+                queue_delete(db, f.key)
+                db.delete(f)
             m.body = ""
             if edit:
                 edit.edited_at, edit.deleted = now(), 1
@@ -117,6 +128,8 @@ def install_extra_routes(app, authenticated, admin):
             if m.sender_name != user["username"]:
                 audit(db, user["username"], "content", f"deleted chat message {message_id} by {m.sender_name}")
             db.commit()
+            from .hardening import drain_deletions
+            drain_deletions(engine, app.state.storage)
             return {"ok": True}
 
     # ---- project access by group (admin) ------------------------------------------
@@ -125,7 +138,9 @@ def install_extra_routes(app, authenticated, admin):
         with Session(engine) as db:
             if not db.get(Project, project_id):
                 raise HTTPException(404, "Project not found")
-            return {"group_ids": sorted(db.scalars(select(ProjectAccess.group_id).where(ProjectAccess.project_id == project_id)))}
+            groups = sorted(db.scalars(select(ProjectAccess.group_id).where(ProjectAccess.project_id == project_id)))
+            policy = db.get(ProjectPolicy, project_id)
+            return {"group_ids": groups, "restricted": bool(groups or (policy and policy.restricted))}
 
     @app.put("/api/admin/projects/{project_id}/access")
     def set_access(project_id: int, data: AccessInput, actor=Depends(admin)):
@@ -134,14 +149,21 @@ def install_extra_routes(app, authenticated, admin):
             if not p:
                 raise HTTPException(404, "Project not found")
             wanted = set(data.group_ids)
+            restricted = bool(wanted) if data.restricted is None else data.restricted
+            if wanted and not restricted:
+                raise HTTPException(422, "Conflicting access policy")
             if wanted and set(db.scalars(select(TeamGroup.id).where(TeamGroup.id.in_(wanted)))) != wanted:
                 raise HTTPException(404, "Group not found")
             db.execute(delete(ProjectAccess).where(ProjectAccess.project_id == project_id))
+            policy = db.get(ProjectPolicy, project_id)
+            if not policy:
+                policy = ProjectPolicy(project_id=project_id); db.add(policy)
+            policy.restricted = int(restricted)
             for gid in sorted(wanted):
                 db.add(ProjectAccess(project_id=project_id, group_id=gid))
-            audit(db, actor["username"], "account-access", f"project {p.name} access: {'all members' if not wanted else f'{len(wanted)} groups'}")
+            audit(db, actor["username"], "account-access", f"project {p.name} access: {'all members' if not restricted else f'{len(wanted)} groups (restricted)'}")
             db.commit()
-            return {"ok": True, "restricted": bool(wanted)}
+            return {"ok": True, "restricted": restricted}
 
     # ---- activity log (admin) -----------------------------------------------------
     @app.get("/api/admin/audit")
@@ -157,4 +179,7 @@ def install_extra_routes(app, authenticated, admin):
 
 
 def forget_group_access(db, group_id):
+    # Preserve the restricted state even if the final allowed group disappears.
+    for pid in db.scalars(select(ProjectAccess.project_id).where(ProjectAccess.group_id == group_id)):
+        if not db.get(ProjectPolicy, pid): db.add(ProjectPolicy(project_id=pid, restricted=1))
     db.execute(delete(ProjectAccess).where(ProjectAccess.group_id == group_id))

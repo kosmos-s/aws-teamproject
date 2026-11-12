@@ -78,7 +78,7 @@ function memberRow(user) {
   const secret = document.createElement('div'); secret.className = 'secret'; secret.append(pw, reset, remove);
   if (user.totp) {
     const otp = document.createElement('button'); otp.className = 'secondary'; otp.textContent = '2FA 초기화'; otp.title = '휴대폰을 잃어버린 멤버의 2단계 인증을 끕니다';
-    otp.addEventListener('click', async () => { if (!window.confirm(`${user.username}의 2단계 인증을 초기화할까요?`)) return; try { await api(`/api/admin/users/${user.id}/totp`, {method:'DELETE'}); await refreshAdmin(); message(`${user.username}의 2단계 인증을 초기화했습니다.`); } catch (e) { message(e.message); } });
+    otp.addEventListener('click', async () => { if (!window.confirm(`${user.username}의 2단계 인증을 초기화할까요?`)) return; try { const password = await askPassword(); if (password === null) return; await api(`/api/admin/users/${user.id}/totp`, {method:'DELETE',body:{password}}); await refreshAdmin(); message(`${user.username}의 2단계 인증을 초기화했습니다.`); } catch (e) { message(e.message); } });
     secret.append(otp);
   }
   row.append(secret);
@@ -285,25 +285,32 @@ async function openAccessEditor(node, project) {
   try { [groups, current] = await Promise.all([api('/api/admin/groups'), api(`/api/admin/projects/${project.id}/access`)]); }
   catch (error) { live.editing = false; message(error.message); return; }
   const ed = document.createElement('div'); ed.className = 'group-editor';
-  const help = document.createElement('small'); help.textContent = groups.length ? '아무 그룹도 고르지 않으면 모든 멤버에게 보입니다. 관리자는 항상 볼 수 있습니다.' : '그룹이 없습니다. 그룹 관리에서 먼저 만드세요.';
+  const help = document.createElement('small'); help.textContent = '제한 공개에서 그룹을 모두 없애도 공개되지 않습니다. 관리자는 항상 볼 수 있습니다. 공개 범위는 포털 자료에 적용됩니다.';
   const picks = document.createElement('div'); picks.className = 'picks';
   const chosen = new Set(current.group_ids);
+  const mode = document.createElement('select'); mode.setAttribute('aria-label','프로젝트 공개 범위');
+  for (const [value,label] of [['restricted','선택한 그룹만'],['public','전체 회원']]) { const option=document.createElement('option'); option.value=value; option.textContent=label; mode.append(option); }
+  mode.value=current.restricted?'restricted':'public';
+  const preview=document.createElement('p'); preview.setAttribute('aria-live','polite');
+  const updatePreview=()=> { const ids=new Set(groups.filter(g=>chosen.has(g.id)).flatMap(g=>g.user_ids)); preview.textContent=mode.value==='public'?'모든 회원과 관리자에게 공개됩니다.':`선택한 그룹의 ${ids.size}명과 관리자만 볼 수 있습니다.${ids.size?'':' 일반 회원은 볼 수 없습니다.'}`; picks.hidden=mode.value==='public'; };
+  mode.addEventListener('change',updatePreview);
+
   for (const g of groups) {
     const l = document.createElement('label'); const c = document.createElement('input'); c.type = 'checkbox'; c.checked = chosen.has(g.id);
-    c.addEventListener('change', () => { if (c.checked) chosen.add(g.id); else chosen.delete(g.id); });
+    c.addEventListener('change', () => { if (c.checked) chosen.add(g.id); else chosen.delete(g.id); updatePreview(); });
     l.append(c, document.createTextNode(`${g.name} (${g.user_ids.length}명)`)); picks.append(l);
   }
   const row = document.createElement('div'); row.className = 'note-actions';
   const save = document.createElement('button'); save.textContent = '저장';
   const cancel = document.createElement('button'); cancel.className = 'secondary'; cancel.textContent = '취소';
-  row.append(save, cancel); ed.append(help, picks, row); node.append(ed);
+  row.append(save, cancel); ed.append(help, mode, picks, preview, row); node.append(ed); updatePreview();
   cancel.addEventListener('click', () => { live.editing = false; refresh().catch(e => message(e.message)); });
   save.addEventListener('click', async () => {
     save.disabled = true;
     try {
-      await api(`/api/admin/projects/${project.id}/access`, {method:'PUT', body:{group_ids:[...chosen]}});
+      await api(`/api/admin/projects/${project.id}/access`, {method:'PUT', body:{group_ids:mode.value==='restricted'?[...chosen]:[],restricted:mode.value==='restricted'}});
       live.editing = false; await refresh();
-      message(chosen.size ? `${project.name}: 선택한 그룹과 관리자만 볼 수 있습니다.` : `${project.name}: 모든 멤버가 볼 수 있습니다.`);
+      message(`${project.name}: 공개 범위를 저장했습니다.`);
     } catch (error) { message(error.message); save.disabled = false; }
   });
 }

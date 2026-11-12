@@ -31,6 +31,8 @@ def main():
             print("User created")
         elif args.command == "monitor":
             print(json.dumps(monitor(engine, app.state.settings.data_dir)))
+            from .hardening import maintenance
+            print(json.dumps(maintenance(engine,storage)))
         elif args.command == "backup":
             data = backup(engine, storage)
             print(f"Backup stored: {len(data)} bytes")

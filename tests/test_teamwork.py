@@ -134,9 +134,9 @@ class TeamworkTests(unittest.TestCase):
         boss.post(f"/api/projects/{pid}/archive")
         storage = Storage(self.settings)
         payload = json.loads(backup(self.app.state.engine, storage))
-        self.assertEqual(payload["version"], 2)
+        self.assertEqual(payload["version"], 3)
         self.assertEqual([m["body"] for m in payload["tables"]["chat_messages"]], ["public"])
-        self.assertIsNone(payload["tables"]["chat_messages"][0]["sender_id"])
+        self.assertEqual(payload["tables"]["chat_messages"][0]["sender_id"], self.uid("amy"))
         self.assertEqual(len(payload["tables"]["project_archives"]), 1)
         with tempfile.TemporaryDirectory() as other:
             target = create_app(Settings(database_url=f"sqlite:///{other}/r.db", data_dir=Path(other), origin="http://testserver", secure_cookies=False))

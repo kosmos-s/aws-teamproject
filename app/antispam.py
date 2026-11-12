@@ -6,6 +6,7 @@
 A refused message returns 429 with Retry-After so the browser can show a countdown.
 """
 import time
+import threading
 
 from fastapi import HTTPException
 
@@ -16,6 +17,7 @@ DUPLICATES, DUPLICATE_WINDOW = 2, 30
 
 class AntiSpam:
     def __init__(self):
+        self.lock = threading.Lock()
         self.sent = {}   # user_id -> [timestamps]
         self.texts = {}  # user_id -> [(timestamp, normalized text)]
 
@@ -24,6 +26,9 @@ class AntiSpam:
         return " ".join((text or "").split()).lower()
 
     def check(self, user_id, text):
+        with self.lock: return self._check(user_id,text)
+
+    def _check(self, user_id, text):
         now = time.time()
         sent = [t for t in self.sent.get(user_id, []) if now - t < SUSTAINED_WINDOW]
         burst = [t for t in sent if now - t < BURST_WINDOW]
