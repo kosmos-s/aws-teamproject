@@ -60,6 +60,9 @@ def install_collab_routes(app, authenticated):
             db.add(ChatRead(user_id=user_id, room_key=key, last_id=last_id))
         elif last_id > row.last_id:
             row.last_id = last_id
+        else:
+            return
+        app.state.change_version = getattr(app.state, "change_version", 0) + 1
 
     def dm_filter(a, b):
         return and_(ChatMessage.room == "dm", or_(and_(ChatMessage.sender_id == a, ChatMessage.recipient_id == b),
@@ -84,10 +87,22 @@ def install_collab_routes(app, authenticated):
         if not db.get(TeamGroup, gid) or not db.get(GroupMember, (gid, me.id)):
             raise HTTPException(404, "Group not found")
 
-    def serialize(m, uid, edits=None):
+    def serialize(m, uid, edits=None, readers=None):
         e = (edits or {}).get(m.id)
+        unread_by = 0
+        if readers is not None:
+            unread_by = sum(1 for pid, last in readers.items() if pid != m.sender_id and last < m.id)
         return {"id": m.id, "sender": m.sender_name, "mine": m.sender_id == uid, "body": m.body, "created": m.created,
-                "edited": e.edited_at if e and not e.deleted else None, "deleted": bool(e and e.deleted)}
+                "edited": e.edited_at if e and not e.deleted else None, "deleted": bool(e and e.deleted),
+                "unread_by": unread_by}
+
+    def room_readers(db, participants, key_for):
+        """participant user_id -> last read message id in this room."""
+        reads = {}
+        for pid in participants:
+            r = db.get(ChatRead, (pid, key_for(pid)))
+            reads[pid] = r.last_id if r else 0
+        return reads
 
     def with_edits(db, rows):
         ids = [m.id for m in rows]
@@ -107,7 +122,7 @@ def install_collab_routes(app, authenticated):
             dm_unread = db.scalar(select(func.count(ChatMessage.id)).where(
                 ChatMessage.room == "dm", ChatMessage.recipient_id == uid)) or 0
             return {"board": board, "events": max_id(db, Event.id),
-                    "chat": f"{max_id(db, ChatMessage.id)}-{dm_unread}-{db.scalar(select(func.max(ChatEdit.edited_at))) or ''}",
+                    "chat": f"{max_id(db, ChatMessage.id)}|{dm_unread}|{db.scalar(select(func.max(ChatEdit.edited_at))) or ''}|{db.scalar(select(func.sum(ChatRead.last_id))) or 0}",
                     "access": f"{db.scalar(select(func.count(ProjectAccess.project_id))) or 0}-{db.scalar(select(func.count(GroupMember.user_id))) or 0}",
                     "users": db.scalar(select(func.count(User.id))) or 0}
 
@@ -140,7 +155,10 @@ def install_collab_routes(app, authenticated):
                 mark_read(db, me.id, "main", rows[-1].id)
                 db.commit()
             edits = with_edits(db, rows)
-            return [serialize(m, me.id, edits) for m in rows]
+            blocked = set(db.scalars(select(BlockedUser.user_id)))
+            people = [u for u in db.scalars(select(User.id)) if u not in blocked]
+            readers = room_readers(db, people, lambda pid: "main")
+            return [serialize(m, me.id, edits, readers) for m in rows]
 
     @app.post("/api/chat/main", status_code=201)
     def post_main(data: ChatInput, user=Depends(authenticated)):
@@ -166,7 +184,9 @@ def install_collab_routes(app, authenticated):
                 mark_read(db, me.id, f"g:{gid}", rows[-1].id)
                 db.commit()
             edits = with_edits(db, rows)
-            return [serialize(m, me.id, edits) for m in rows]
+            members = list(db.scalars(select(GroupMember.user_id).where(GroupMember.group_id == gid)))
+            readers = room_readers(db, members, lambda pid: f"g:{gid}")
+            return [serialize(m, me.id, edits, readers) for m in rows]
 
     @app.post("/api/chat/group/{gid}", status_code=201)
     def post_group(gid: int, data: ChatInput, user=Depends(authenticated)):
@@ -199,7 +219,8 @@ def install_collab_routes(app, authenticated):
                 mark_read(db, me.id, f"dm:{peer_id}", rows[-1].id)
                 db.commit()
             edits = with_edits(db, rows)
-            return [serialize(m, me.id, edits) for m in rows]
+            readers = room_readers(db, [me.id, peer_id], lambda pid: f"dm:{peer_id if pid == me.id else me.id}")
+            return [serialize(m, me.id, edits, readers) for m in rows]
 
     @app.post("/api/chat/dm/{peer_id}", status_code=201)
     def post_dm(peer_id: int, data: ChatInput, user=Depends(authenticated)):

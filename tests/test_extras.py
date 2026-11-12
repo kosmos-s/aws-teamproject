@@ -130,6 +130,23 @@ class ExtrasTests(unittest.TestCase):
         amy.post("/api/chat/main", json={"body": "   "})           # failed write (422) does not wake anyone
         self.assertEqual(ben.get("/api/wait?v=-1").json()["v"], before)
 
+    def test_read_counts_like_kakaotalk(self):
+        amy, ben, boss = self.client("amy"), self.client("ben"), self.client("boss")
+        amy.post("/api/chat/main", json={"body": "공지"})
+        # 4 active accounts: boss, ben, gus have not read it (amy is the sender)
+        self.assertEqual(amy.get("/api/chat/main").json()[-1]["unread_by"], 3)
+        v = amy.get("/api/wait?v=-1").json()["v"]
+        ben.get("/api/chat/main")                                   # ben reads
+        self.assertGreater(amy.get("/api/wait?v=-1").json()["v"], v)  # reading wakes the sender's screen
+        self.assertEqual(amy.get("/api/chat/main").json()[-1]["unread_by"], 2)
+        boss.patch(f"/api/admin/users/{self.uid('gus')}", json={"active": False, "role": "viewer"})
+        self.assertEqual(amy.get("/api/chat/main").json()[-1]["unread_by"], 1)  # blocked accounts are not counted
+        mid = amy.post(f"/api/chat/dm/{self.uid('ben')}", json={"body": "1:1"}).json()["id"]
+        dm = lambda c, peer: next(m for m in c.get(f"/api/chat/dm/{self.uid(peer)}").json() if m["id"] == mid)
+        self.assertEqual(dm(amy, "ben")["unread_by"], 1)
+        self.assertEqual(dm(ben, "amy")["unread_by"], 0)   # ben opening the room reads it
+        self.assertEqual(dm(amy, "ben")["unread_by"], 0)
+
     def test_delete_user_with_edited_dm(self):
         boss, amy = self.client("boss"), self.client("amy")
         mid = amy.post(f"/api/chat/dm/{self.uid('ben')}", json={"body": "hi"}).json()["id"]

@@ -159,6 +159,7 @@ async function refresh() {
   }
   const projectNode = (p) => {
     const node = record(p.name, p.description, new Date(p.created).toLocaleString());
+    const actions = document.createElement('div'); actions.className = 'record-actions';
     if (p.access_groups?.length) { const chips = document.createElement('div'); for (const g of p.access_groups) { const c = document.createElement('span'); c.className = 'chip lock'; c.textContent = '공개: ' + g; chips.append(c); } node.append(chips); }
     if (!p.archived && p.orca_available && currentUser?.role !== 'viewer') {
       const button = document.createElement('button'); button.textContent = 'Orca에서 개발환경 열기';
@@ -172,8 +173,8 @@ async function refresh() {
         } catch (error) { if (tab) tab.close(); message(error.message); }
         finally { button.disabled = false; }
       });
-      node.append(button);
-      if (p.repository_url && p.repository_url.startsWith('https://')) {const link=document.createElement('a');link.href=p.repository_url;link.textContent=' GitHub 저장소';link.target='_blank';link.rel='noopener noreferrer';node.append(link);}
+      actions.append(button);
+      if (p.repository_url && p.repository_url.startsWith('https://')) {const link=document.createElement('a');link.href=p.repository_url;link.textContent='GitHub';link.className='button-link secondary';link.target='_blank';link.rel='noopener noreferrer';actions.append(link);}
     }
     if (isAdmin) {
       const b = document.createElement('button'); b.className = 'secondary'; b.textContent = p.archived ? '복원' : '보관';
@@ -183,13 +184,14 @@ async function refresh() {
         try { await api(`/api/projects/${p.id}/archive`, {method: p.archived ? 'DELETE' : 'POST'}); await refresh(); message(p.archived ? '프로젝트를 복원했습니다.' : '프로젝트를 보관했습니다.'); }
         catch (error) { message(error.message); b.disabled = false; }
       });
-      node.append(' ', b);
+      actions.append(b);
       if (!p.archived && typeof openAccessEditor === 'function') {
         const acc = document.createElement('button'); acc.className = 'secondary'; acc.textContent = '공개 범위';
         acc.addEventListener('click', () => openAccessEditor(node, p));
-        node.append(' ', acc);
+        actions.append(acc);
       }
     }
+    if (actions.children.length) node.append(actions);
     return node;
   };
   for (const p of active) $('projects').append(projectNode(p));
@@ -304,7 +306,11 @@ async function livePoll() {
       if (now.board !== prev.board || now.events !== prev.events || Date.now() - live.lastFull > 60000) { live.lastFull = Date.now(); await refresh(); }
       else if (now.users !== prev.users && currentUser?.role === 'admin') await refreshAdmin();
       if (now.access !== prev.access && now.board === prev.board) { live.lastFull = Date.now(); await refresh(); }
-      if (now.chat !== prev.chat || now.access !== prev.access) await chatTick(now.chat.split('-')[2] !== prev.chat.split('-')[2]);
+      if (now.chat !== prev.chat || now.access !== prev.access) {
+        const [a, b] = [now.chat.split('|'), prev.chat.split('|')];
+        // edits (part 2) or read progress (part 3) change messages already on screen: reload the room
+        await chatTick(a[2] !== b[2] || a[3] !== b[3]);
+      }
     } else live.lastFull = Date.now();
     if ($('message').dataset.offline) { message(''); delete $('message').dataset.offline; }
   } catch (error) {
