@@ -1,6 +1,6 @@
 #!/bin/bash
 # Operator/SSM only. Never wired to a web endpoint. No secret values are printed.
-set -euo pipefail
+set -Eeuo pipefail
 archive=$(realpath -- "${1:?release archive required}")
 root=/opt/kosmos-portal
 backup=/var/tmp/kosmos-before-review-$(date -u +%Y%m%dT%H%M%SZ).tgz
@@ -28,8 +28,19 @@ curl -fsS http://127.0.0.1:8000/health >/dev/null
 stage=$(mktemp -d /var/tmp/kosmos-review-release.XXXXXX)
 chmod 755 "$stage"
 tar -xzf "$archive" -C "$stage"
+# This directory contains public release source only. Service-account imports must traverse it.
+python3 - "$stage" <<'PY'
+import os,sys
+from pathlib import Path
+for folder,dirs,files in os.walk(sys.argv[1],followlinks=False):
+    p=Path(folder);p.chmod(0o755)
+    for name in files:
+        f=p/name
+        if f.is_symlink():raise SystemExit('Unexpected staging symlink')
+        f.chmod(0o644)
+PY
 # Existing locked dependencies are unchanged; install the added crypto dependency before stopping anything.
-.venv/bin/python -m pip install --disable-pip-version-check -r "$stage/requirements.lock" >/dev/null
+(umask 022; .venv/bin/python -m pip install --disable-pip-version-check -r "$stage/requirements.lock" >/dev/null)
 tar -czf "$backup" app requirements.lock
 chmod 600 "$backup"
 
@@ -75,7 +86,7 @@ from pathlib import Path
 with tarfile.open(sys.argv[1]) as package:
     for m in package.getmembers():
         if m.name=='release-manifest.json':continue
-        p=Path(m.name);p.parent.mkdir(parents=True,exist_ok=True)
+        p=Path(m.name);p.parent.mkdir(parents=True,exist_ok=True);p.parent.chmod(0o755)
         p.write_bytes(package.extractfile(m).read());p.chmod(0o644)
 PY
 as_portal -c 'from app.main import create_app; a=create_app(); a.state.engine.dispose()'
