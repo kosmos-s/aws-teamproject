@@ -147,10 +147,19 @@ async function chatReload() {
   chat.lastId = 0; log.replaceChildren(); await chatLoad();
   log.scrollTop = atBottom ? log.scrollHeight : top;
 }
+// Always fetch in server order from the last id we have. If another change arrives while a
+// fetch is running, remember it and fetch again, so simultaneous messages are never skipped.
 async function chatLoad() {
-  if (chat.loading) return; chat.loading = true;
-  try { chatAppend(await api(`${chatRoomPath()}?after=${chat.lastId}`)); }
-  finally { chat.loading = false; }
+  if (chat.loading) { chat.again = true; return; }
+  chat.loading = true;
+  try {
+    do {
+      chat.again = false;
+      const room = chat.room;
+      const rows = await api(`${chatRoomPath()}?after=${chat.lastId}`);
+      if (room === chat.room) chatAppend(rows);
+    } while (chat.again);
+  } finally { chat.loading = false; }
 }
 
 function chatTitle() {
@@ -178,14 +187,21 @@ async function chatStart() { chat.started = true; chat.room = 'main'; chat.lastI
 function chatReset() { chat.rooms = null; chat.started = false; chat.lastId = 0; chat.room = 'main'; chat.groups = []; $('chat-log')?.replaceChildren(); $('chat-rooms')?.replaceChildren(); showUnread(0); document.title = BASE_TITLE; }
 
 window.addEventListener('DOMContentLoaded', () => {
-  $('chat-form').addEventListener('submit', async event => {
+  // Sends are queued in order; the box is cleared immediately so typing the next message is never lost.
+  let sendQueue = Promise.resolve();
+  $('chat-form').addEventListener('submit', event => {
     event.preventDefault();
     const input = event.target.elements.body; const text = input.value.trim();
     if (!text) return;
-    const button = event.target.querySelector('button'); button.disabled = true;
-    try { chatAppend([await api(chatRoomPath(), {method:'POST', body:{body:text}})]); input.value = ''; }
-    catch (error) { message(error.message); }
-    finally { button.disabled = false; input.focus(); }
+    const path = chatRoomPath();
+    input.value = ''; input.focus();
+    sendQueue = sendQueue.then(async () => {
+      try { await api(path, {method:'POST', body:{body:text}}); await chatLoad(); }
+      catch (error) {
+        message(error.message);
+        if (!input.value) input.value = text;  // give the unsent text back
+      }
+    });
   });
   $('chat-people-search').addEventListener('input', () => chatPeople().catch(() => {}));
   const toggle = $('notify-toggle'), state = $('notify-state');
