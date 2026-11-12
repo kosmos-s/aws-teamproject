@@ -1,0 +1,8 @@
+[Unit]
+Description=Process one admin Orca link request (fixed steps, see deploy/orca-link-worker.py)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/kosmos-portal/.venv/bin/python /opt/kosmos-portal/deploy/orca-link-worker.py
+TimeoutStartSec=360

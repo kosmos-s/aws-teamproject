@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for admin Orca link requests every 20 seconds
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=20
+AccuracySec=5
+
+[Install]
+WantedBy=timers.target

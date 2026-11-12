@@ -1,0 +1,20 @@
+[Unit]
+Description=KOSMOS operations portal
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=kosmos-portal
+Group=kosmos-portal
+WorkingDirectory=/opt/kosmos-portal
+EnvironmentFile=/etc/kosmos-portal.env
+ExecStart=/opt/kosmos-portal/.venv/bin/uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000 --workers 1 --no-access-log --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kosmos-portal
+[Install]
+WantedBy=multi-user.target

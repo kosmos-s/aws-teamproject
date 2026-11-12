@@ -1,0 +1,18 @@
+[Unit]
+Description=Fixed Orca pairing operation for authenticated portal
+After=network.target
+[Service]
+User=orca
+Group=kosmos-portal
+Environment=HOME=/home/orca
+Environment=XDG_RUNTIME_DIR=/run/user/1001
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus
+RuntimeDirectory=kosmos-orca-broker
+RuntimeDirectoryMode=0750
+WorkingDirectory=/opt/kosmos-portal
+ExecStart=/usr/bin/python3 /opt/kosmos-portal/app/orca_broker.py
+Restart=on-failure
+NoNewPrivileges=true
+UMask=0007
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=KOSMOS business database and attachment backup
+After=kosmos-portal.service
+[Service]
+Type=oneshot
+User=kosmos-portal
+Group=kosmos-portal
+WorkingDirectory=/opt/kosmos-portal
+EnvironmentFile=/etc/kosmos-portal.env
+ExecStart=/opt/kosmos-portal/.venv/bin/python -m app.cli backup
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kosmos-portal

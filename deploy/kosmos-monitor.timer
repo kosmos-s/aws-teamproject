@@ -1,0 +1,7 @@
+[Unit]
+Description=Check KOSMOS every minute
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=60s
+[Install]
+WantedBy=timers.target
