@@ -1,3 +1,4 @@
+import asyncio
 import secrets
 import time
 from datetime import datetime, timezone
@@ -67,6 +68,7 @@ def create_app(settings=None):
     failures = {}
     account_failures = {}  # per-username lockout, independent of client IP
     seen = {}  # user_id -> last time last_seen was written (throttle DB writes)
+    replaced = {}  # token_hash -> time it was ended by a newer login of the same account
     FORCED_OK = {"/api/session", "/api/logout", "/api/account/password"}
     dummy_hash = password_hash("unmatched-dummy-password")
 
@@ -83,6 +85,8 @@ def create_app(settings=None):
         if not length.isdigit() or int(length) > 2 * 1024 * 1024:
             return JSONResponse({"detail": "Request too large"}, status_code=413)
         response = await call_next(request)
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and response.status_code < 400:
+            app.state.change_version += 1  # wakes every open /api/wait request
         response.headers.update({"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
                                  "Referrer-Policy": "same-origin", "Cache-Control": "no-store",
                                  "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"})
@@ -97,8 +101,11 @@ def create_app(settings=None):
     def authenticated(request: Request):
         cookie = request.cookies.get("kosmos_session", "")
         with Session(engine) as db:
-            row = db.get(LoginSession, token_hash(cookie))
+            hashed = token_hash(cookie)
+            row = db.get(LoginSession, hashed)
             if not row or row.expires <= time.time():
+                if hashed in replaced:
+                    raise HTTPException(401, "Signed in elsewhere")
                 raise HTTPException(401, "Login required")
             user = db.get(User, row.user_id)
             if not user or db.get(BlockedUser, user.id):
@@ -137,14 +144,35 @@ def create_app(settings=None):
             failures.pop(key, None)
             account_failures.pop(account, None)
             db.execute(delete(LoginSession).where(LoginSession.expires <= time.time()))
+            # One account = one active session: a new login ends every older session of the same account.
+            ended = list(db.scalars(select(LoginSession.token_hash).where(LoginSession.user_id == user.id)))
+            if ended:
+                db.execute(delete(LoginSession).where(LoginSession.token_hash.in_(ended)))
             token, csrf = secrets.token_urlsafe(32), secrets.token_hex(32)
             db.add(LoginSession(token_hash=token_hash(token), user_id=user.id, csrf=csrf, expires=time.time() + 28800))
             act = activity(db, user.id)
             act.last_login = act.last_seen = now()
             db.commit()
-        response = JSONResponse({"csrf": csrf})
+        cutoff = time.time() - 30000
+        for old in [k for k, t in replaced.items() if t < cutoff]:
+            replaced.pop(old, None)
+        for old in ended:
+            replaced[old] = time.time()
+            app.state.orca_revoke_hash(old)  # also close that browser's open Orca connection
+        response = JSONResponse({"csrf": csrf, "ended_sessions": len(ended)})
         response.set_cookie("kosmos_session", token, max_age=28800, httponly=True, secure=settings.secure_cookies, samesite="lax")
         return response
+
+    # Long-poll: the browser holds one request open; any successful write in this (single-worker)
+    # process bumps the version and answers it at once, so chat appears without a 3 s polling delay.
+    app.state.change_version = 0
+
+    @app.get("/api/wait")
+    async def wait_for_change(v: int = -1, user=Depends(authenticated)):
+        deadline = time.monotonic() + 25
+        while app.state.change_version == v and time.monotonic() < deadline:
+            await asyncio.sleep(0.2)
+        return {"v": app.state.change_version}
 
     @app.get("/api/session")
     def session(user=Depends(authenticated)):

@@ -1,6 +1,6 @@
 'use strict';
 // Team chat: main room, group rooms ('g<id>') and 1:1 rooms ('u<id>'). Text is always set with textContent.
-const chat = { room: 'main', lastId: 0, peers: [], groups: [], loading: false, started: false, lastTotal: 0 };
+const chat = { room: 'main', lastId: 0, peers: [], groups: [], loading: false, started: false, lastTotal: 0, rooms: null };
 const BASE_TITLE = 'KOSMOS · 운영 포털';
 
 function chatRoomPath() {
@@ -21,6 +21,44 @@ function chatRoomButton(label, key, unread, extra, cls = '') {
 }
 function roomsLabel(text) { const p = document.createElement('p'); p.className = 'rooms-label'; p.textContent = text; return p; }
 
+// ---- chat alarm: popup + sound for rooms you are not looking at ----
+function alarmSetting(name, fallback) { try { const v = localStorage.getItem('kosmos-alarm-' + name); return v === null ? fallback : v === 'on'; } catch { return fallback; } }
+function setAlarmSetting(name, on) { try { localStorage.setItem('kosmos-alarm-' + name, on ? 'on' : 'off'); } catch {} }
+let audioCtx = null;
+function beep() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = 'sine'; o.frequency.value = 880; g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.15, audioCtx.currentTime + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.35);
+    o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + 0.4);
+  } catch { /* sound is optional */ }
+}
+function toast(title, body, key) {
+  const box = $('toasts'); if (!box) return;
+  const t = document.createElement('button'); t.type = 'button'; t.className = 'toast';
+  const s = document.createElement('strong'); s.textContent = title; const p = document.createElement('span'); p.textContent = body;
+  t.append(s, p); box.append(t);
+  const close = () => t.remove();
+  t.addEventListener('click', () => { close(); showView('chat'); chatOpen(key); });
+  setTimeout(close, 6000);
+  while (box.children.length > 3) box.firstChild.remove();
+}
+function chatAlarm(rooms) {
+  // rooms: key -> {label, unread}. Compare with the previous snapshot; the first load never alarms.
+  const prev = chat.rooms; chat.rooms = rooms;
+  if (!prev) return;
+  const viewingChat = document.querySelector('.view.active')?.dataset.view === 'chat' && !document.hidden;
+  let fired = false;
+  for (const [key, r] of Object.entries(rooms)) {
+    const before = prev[key]?.unread || 0;
+    if (r.unread > before && !(viewingChat && chat.room === key)) {
+      if (alarmSetting('popup', true)) toast(r.label, `새 메시지 ${r.unread - before}개`, key);
+      fired = true;
+    }
+  }
+  if (fired && alarmSetting('sound', true)) beep();
+}
 function notifyNew(total) {
   try {
     if (total > chat.lastTotal && document.hidden && 'Notification' in window && Notification.permission === 'granted' && localStorage.getItem('kosmos-notify') === 'on')
@@ -52,6 +90,10 @@ async function chatPeople() {
     if (filter && !p.username.toLowerCase().includes(filter)) continue;
     nav.append(chatRoomButton((p.online ? '● ' : '○ ') + p.username, 'u' + p.id, chat.room === 'u' + p.id ? 0 : p.unread, p.online ? '접속 중' : ''));
   }
+  const rooms = { main: { label: '# 전체 채팅', unread: data.main_unread } };
+  for (const g of chat.groups) rooms['g' + g.id] = { label: '# ' + g.name, unread: g.unread };
+  for (const p of data.people) rooms['u' + p.id] = { label: `${p.username}님의 1:1 메시지`, unread: p.unread };
+  chatAlarm(rooms);
   const total = (chat.room === 'main' ? 0 : data.main_unread) + chat.groups.reduce((n, g) => n + (chat.room === 'g' + g.id ? 0 : g.unread), 0)
     + data.people.reduce((n, p) => n + (chat.room === 'u' + p.id ? 0 : p.unread), 0);
   showUnread(total);
@@ -72,8 +114,11 @@ function chatAppend(messages) {
     const body = document.createElement('p'); body.textContent = m.deleted ? '삭제된 메시지입니다' : m.body;
     if (m.deleted) row.classList.add('deleted');
     row.append(meta, body);
+    if (m.unread_by > 0 && !m.deleted) { const n = document.createElement('em'); n.className = 'unread-by'; n.title = '아직 읽지 않은 사람 수'; n.textContent = String(m.unread_by); row.append(n); }
     if (!m.deleted && (m.mine || currentUser?.role === 'admin')) row.append(messageTools(m, row));
-    log.append(row); chat.lastId = m.id;
+    const pendingAt = log.querySelector('.msg.local');  // keep unsent bubbles at the bottom
+    if (pendingAt) log.insertBefore(row, pendingAt); else log.append(row);
+    chat.lastId = m.id;
   }
   if (nearBottom || messages.some(m => m.mine)) log.scrollTop = log.scrollHeight;
 }
@@ -102,13 +147,24 @@ function messageTools(m, row) {
 }
 async function chatReload() {
   const log = $('chat-log'); const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80; const top = log.scrollTop;
+  const locals = [...log.querySelectorAll('.msg.local')];
   chat.lastId = 0; log.replaceChildren(); await chatLoad();
+  for (const node of locals) if (node.dataset.room === chat.room) log.append(node);
   log.scrollTop = atBottom ? log.scrollHeight : top;
 }
+// Always fetch in server order from the last id we have. If another change arrives while a
+// fetch is running, remember it and fetch again, so simultaneous messages are never skipped.
 async function chatLoad() {
-  if (chat.loading) return; chat.loading = true;
-  try { chatAppend(await api(`${chatRoomPath()}?after=${chat.lastId}`)); }
-  finally { chat.loading = false; }
+  if (chat.loading) { chat.again = true; return; }
+  chat.loading = true;
+  try {
+    do {
+      chat.again = false;
+      const room = chat.room;
+      const rows = await api(`${chatRoomPath()}?after=${chat.lastId}`);
+      if (room === chat.room) chatAppend(rows);
+    } while (chat.again);
+  } finally { chat.loading = false; }
 }
 
 function chatTitle() {
@@ -133,17 +189,46 @@ async function chatTick(reload = false) {
   await chatPeople();
 }
 async function chatStart() { chat.started = true; chat.room = 'main'; chat.lastId = 0; $('chat-log').replaceChildren(); $('chat-title').textContent = '# 전체 채팅'; await chatTick(); }
-function chatReset() { chat.started = false; chat.lastId = 0; chat.room = 'main'; chat.groups = []; $('chat-log')?.replaceChildren(); $('chat-rooms')?.replaceChildren(); showUnread(0); document.title = BASE_TITLE; }
+function chatReset() { chat.rooms = null; chat.started = false; chat.lastId = 0; chat.room = 'main'; chat.groups = []; $('chat-log')?.replaceChildren(); $('chat-rooms')?.replaceChildren(); showUnread(0); document.title = BASE_TITLE; }
 
 window.addEventListener('DOMContentLoaded', () => {
-  $('chat-form').addEventListener('submit', async event => {
+  // KakaoTalk-style sending: a local bubble appears at once ("전송 중"), is replaced by the server copy
+  // on success, or turns into "전송 실패" with 재전송/삭제. Sends stay in order; the box clears immediately.
+  let sendQueue = Promise.resolve();
+  function sendLocal(node) {
+    const { path, text } = node.dataset;
+    node.classList.remove('failed'); node.classList.add('sending');
+    node.querySelector('small').textContent = '나 · 전송 중…';
+    node.querySelector('.local-actions')?.remove();
+    sendQueue = sendQueue.then(async () => {
+      try {
+        await api(path, {method:'POST', body:{body:text}});
+        node.remove(); await chatLoad();
+      } catch (error) {
+        node.classList.remove('sending'); node.classList.add('failed');
+        node.querySelector('small').textContent = '나 · 전송 실패';
+        const actions = document.createElement('span'); actions.className = 'local-actions';
+        const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '재전송';
+        const drop = document.createElement('button'); drop.type = 'button'; drop.textContent = '삭제';
+        retry.addEventListener('click', () => sendLocal(node));
+        drop.addEventListener('click', () => node.remove());
+        actions.append(retry, drop); node.append(actions);
+        message(error.message);
+      }
+    });
+  }
+  $('chat-form').addEventListener('submit', event => {
     event.preventDefault();
     const input = event.target.elements.body; const text = input.value.trim();
     if (!text) return;
-    const button = event.target.querySelector('button'); button.disabled = true;
-    try { chatAppend([await api(chatRoomPath(), {method:'POST', body:{body:text}})]); input.value = ''; }
-    catch (error) { message(error.message); }
-    finally { button.disabled = false; input.focus(); }
+    input.value = ''; input.focus();
+    const node = document.createElement('div'); node.className = 'msg mine local sending';
+    node.dataset.path = chatRoomPath(); node.dataset.text = text; node.dataset.room = chat.room;
+    const meta = document.createElement('small'); meta.textContent = '나 · 전송 중…';
+    const body = document.createElement('p'); body.textContent = text;
+    node.append(meta, body);
+    const log = $('chat-log'); log.querySelector('.chat-empty')?.remove(); log.append(node); log.scrollTop = log.scrollHeight;
+    sendLocal(node);
   });
   $('chat-people-search').addEventListener('input', () => chatPeople().catch(() => {}));
   const toggle = $('notify-toggle'), state = $('notify-state');
@@ -162,4 +247,8 @@ window.addEventListener('DOMContentLoaded', () => {
     draw();
   });
   draw();
+  for (const [id, name] of [['alarm-popup', 'popup'], ['alarm-sound', 'sound']]) {
+    const box = $(id); box.checked = alarmSetting(name, true);
+    box.addEventListener('change', () => { setAlarmSetting(name, box.checked); if (name === 'sound' && box.checked) beep(); });
+  }
 });

@@ -16,7 +16,13 @@ async function api(path, options = {}) {
   try { data = await response.json(); } catch { data = null; }
   if (!response.ok) {
     const detail = data && typeof data.detail === 'string' ? data.detail : '';
-    if (response.status === 401 && path !== '/api/login') { showLogin(); throw new Error('로그인이 필요하거나 만료되었습니다. 다시 로그인하세요.'); }
+    if (response.status === 401 && path !== '/api/login') {
+      const wasIn = !!currentUser;
+      showLogin();
+      const text = detail === 'Signed in elsewhere' ? '다른 곳에서 같은 아이디로 로그인해 이 화면의 접속이 끊겼습니다. 계속하려면 다시 로그인하세요.' : '로그인이 필요하거나 만료되었습니다. 다시 로그인하세요.';
+      if (wasIn) message(text);  // background requests swallow errors, so show it here
+      throw new Error(text);
+    }
     throw new Error(ERRORS[detail] || STATUS_ERRORS[response.status] || `요청을 처리하지 못했습니다 (${response.status}).`);
   }
   if (data === null) throw new Error('서버 응답을 읽지 못했습니다. 잠시 후 다시 시도하세요.');
@@ -54,6 +60,7 @@ const ERRORS = {
   'Only the sender': '보낸 사람만 할 수 있습니다.',
   'Message not found': '메시지를 찾을 수 없습니다.',
   'Message already deleted': '이미 삭제된 메시지입니다.',
+  'Signed in elsewhere': '다른 곳에서 같은 아이디로 로그인해 접속이 끊겼습니다.',
   'Too many messages': '메시지를 너무 빨리 보내고 있습니다. 잠시 후 다시 보내세요.',
   'User not found': '계정을 찾을 수 없습니다. 새로고침하세요.',
   'Project not found': '프로젝트를 찾을 수 없습니다. 새로고침하세요.',
@@ -87,6 +94,7 @@ async function enter(session) {
   $('force-password').hidden = true; $('dashboard').hidden = false;
   showView(location.hash.slice(1) || 'home', false);
   await refresh(); await chatStart();
+  liveLoop();
 }
 const VIEWS = ['home','chat','projects','notes','files','history','account','guide','members','groups','orca','audit','operations','server'];
 function showView(name, push = true) {
@@ -151,6 +159,7 @@ async function refresh() {
   }
   const projectNode = (p) => {
     const node = record(p.name, p.description, new Date(p.created).toLocaleString());
+    const actions = document.createElement('div'); actions.className = 'record-actions';
     if (p.access_groups?.length) { const chips = document.createElement('div'); for (const g of p.access_groups) { const c = document.createElement('span'); c.className = 'chip lock'; c.textContent = '공개: ' + g; chips.append(c); } node.append(chips); }
     if (!p.archived && p.orca_available && currentUser?.role !== 'viewer') {
       const button = document.createElement('button'); button.textContent = 'Orca에서 개발환경 열기';
@@ -164,8 +173,8 @@ async function refresh() {
         } catch (error) { if (tab) tab.close(); message(error.message); }
         finally { button.disabled = false; }
       });
-      node.append(button);
-      if (p.repository_url && p.repository_url.startsWith('https://')) {const link=document.createElement('a');link.href=p.repository_url;link.textContent=' GitHub 저장소';link.target='_blank';link.rel='noopener noreferrer';node.append(link);}
+      actions.append(button);
+      if (p.repository_url && p.repository_url.startsWith('https://')) {const link=document.createElement('a');link.href=p.repository_url;link.textContent='GitHub';link.className='button-link secondary';link.target='_blank';link.rel='noopener noreferrer';actions.append(link);}
     }
     if (isAdmin) {
       const b = document.createElement('button'); b.className = 'secondary'; b.textContent = p.archived ? '복원' : '보관';
@@ -175,13 +184,14 @@ async function refresh() {
         try { await api(`/api/projects/${p.id}/archive`, {method: p.archived ? 'DELETE' : 'POST'}); await refresh(); message(p.archived ? '프로젝트를 복원했습니다.' : '프로젝트를 보관했습니다.'); }
         catch (error) { message(error.message); b.disabled = false; }
       });
-      node.append(' ', b);
+      actions.append(b);
       if (!p.archived && typeof openAccessEditor === 'function') {
         const acc = document.createElement('button'); acc.className = 'secondary'; acc.textContent = '공개 범위';
         acc.addEventListener('click', () => openAccessEditor(node, p));
-        node.append(' ', acc);
+        actions.append(acc);
       }
     }
+    if (actions.children.length) node.append(actions);
     return node;
   };
   for (const p of active) $('projects').append(projectNode(p));
@@ -285,9 +295,10 @@ $('logout').addEventListener('click', async () => { try { await api('/api/logout
 api('/api/session').then(enter).catch(() => showLogin());
 // Live updates: poll a cheap fingerprint and redraw only the parts that changed.
 // 3s while the tab is visible, 15s in the background; a full refresh still runs every 60s.
-const live = { last: null, timer: null, failures: 0, lastFull: 0, editing: false };
+const live = { last: null, timer: null, failures: 0, lastFull: 0, editing: false, busy: false, looping: false, v: -1 };
 async function livePoll() {
-  if ($('dashboard').hidden || !currentUser) return;
+  if ($('dashboard').hidden || !currentUser || live.busy) return;
+  live.busy = true;
   try {
     const now = await api('/api/changes');
     const prev = live.last; live.last = now; live.failures = 0;
@@ -295,17 +306,33 @@ async function livePoll() {
       if (now.board !== prev.board || now.events !== prev.events || Date.now() - live.lastFull > 60000) { live.lastFull = Date.now(); await refresh(); }
       else if (now.users !== prev.users && currentUser?.role === 'admin') await refreshAdmin();
       if (now.access !== prev.access && now.board === prev.board) { live.lastFull = Date.now(); await refresh(); }
-      if (now.chat !== prev.chat || now.access !== prev.access) await chatTick(now.chat.split('-')[2] !== prev.chat.split('-')[2]);
+      if (now.chat !== prev.chat || now.access !== prev.access) {
+        const [a, b] = [now.chat.split('|'), prev.chat.split('|')];
+        // edits (part 2) or read progress (part 3) change messages already on screen: reload the room
+        await chatTick(a[2] !== b[2] || a[3] !== b[3]);
+      }
     } else live.lastFull = Date.now();
     if ($('message').dataset.offline) { message(''); delete $('message').dataset.offline; }
   } catch (error) {
     live.failures += 1;
     if (live.failures === 2) { message(error.message); $('message').dataset.offline = '1'; }
+  } finally { live.busy = false; }
+}
+// Long-poll: the server answers /api/wait the moment anyone writes something, so chat shows up at once.
+async function liveLoop() {
+  if (live.looping) return; live.looping = true; live.v = -1;
+  while (currentUser && !$('dashboard').hidden) {
+    try {
+      const r = await api(`/api/wait?v=${live.v}`);
+      const changed = live.v !== -1 && r.v !== live.v; live.v = r.v;
+      if (changed) await livePoll();
+    } catch { await new Promise(res => setTimeout(res, 3000)); }
   }
+  live.looping = false;
 }
 function liveSchedule() {
   clearTimeout(live.timer);
-  const delay = document.hidden ? 15000 : Math.min(3000 * Math.max(1, live.failures), 30000);
+  const delay = document.hidden ? 30000 : Math.min(15000 * Math.max(1, live.failures), 60000);
   live.timer = setTimeout(async () => { await livePoll(); liveSchedule(); }, delay);
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) livePoll().finally(liveSchedule); });
