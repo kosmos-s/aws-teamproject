@@ -162,3 +162,5 @@ a.button-link.secondary{background:var(--secondary);color:var(--text-btn)}
 .msg p{white-space:pre-wrap}
 
 .notice-list{max-height:28rem;overflow:auto}.notice-unread{border-inline-start:3px solid #38bdf8}.notice-badge{font-weight:700}.notice-list .record{margin-block:.4rem}#notice-form label{display:block;margin-block:.75rem}#notice-form textarea{width:100%;box-sizing:border-box}
+
+.project-manager{margin-block:1rem;padding:1rem;border:1px solid #64748b;border-radius:.6rem}.owner-form{display:grid;gap:.7rem;margin-block:1rem}.owner-form label{display:grid;gap:.35rem}.project-manager input,.project-manager textarea,.project-manager select{width:100%;max-width:100%;box-sizing:border-box}.repository-status{overflow-wrap:anywhere}.repository-status .record{padding:.5rem}

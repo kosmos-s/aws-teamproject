@@ -72,10 +72,11 @@ class TeamworkTests(unittest.TestCase):
         self.assertEqual(amy.get("/api/notes").json(), [])
         self.assertEqual(amy.delete(f"/api/notes/{nid}").status_code, 404)
 
-    def test_project_archive_admin_only(self):
+    def test_project_archive_owner_or_admin_only(self):
         amy, boss = self.client("amy"), self.client("boss")
         pid = amy.post("/api/projects", json={"name": "Old"}).json()["id"]
-        self.assertEqual(amy.post(f"/api/projects/{pid}/archive").status_code, 403)
+        self.assertEqual(self.client('ben').post(f"/api/projects/{pid}/archive").status_code,403)
+        self.assertEqual(amy.post(f"/api/projects/{pid}/archive").status_code, 200)
         self.assertEqual(boss.post(f"/api/projects/{pid}/archive").status_code, 200)
         self.assertTrue(amy.get("/api/projects").json()[0]["archived"])
         self.assertEqual(boss.delete(f"/api/projects/{pid}/archive").status_code, 200)
@@ -134,7 +135,7 @@ class TeamworkTests(unittest.TestCase):
         boss.post(f"/api/projects/{pid}/archive")
         storage = Storage(self.settings)
         payload = json.loads(backup(self.app.state.engine, storage))
-        self.assertEqual(payload["version"], 3)
+        self.assertEqual(payload["version"], 4)
         self.assertEqual([m["body"] for m in payload["tables"]["chat_messages"]], ["public"])
         self.assertEqual(payload["tables"]["chat_messages"][0]["sender_id"], self.uid("amy"))
         self.assertEqual(len(payload["tables"]["project_archives"]), 1)

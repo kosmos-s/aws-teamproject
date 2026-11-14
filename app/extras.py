@@ -1,7 +1,7 @@
 """2026-11-12: attachment delete, chat edit/delete, project access by group, activity log."""
 from datetime import datetime, timezone
 
-from fastapi import Depends, HTTPException, Query
+from fastapi import Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, delete, or_
 from sqlalchemy.orm import Session
@@ -29,7 +29,9 @@ def visible_project_ids(db, user):
     mine = set(db.scalars(select(GroupMember.group_id).where(GroupMember.user_id == me)))
     allowed = {pid for pid, groups in restricted.items() if groups & mine}
     all_ids = set(db.scalars(select(Project.id)))
-    return (all_ids - set(restricted)) | allowed
+    from .models import ProjectOwner
+    owned=set(db.scalars(select(ProjectOwner.project_id).where(ProjectOwner.user_id==me)))
+    return (all_ids - set(restricted)) | allowed | owned
 
 
 def can_see_project(db, user, project_id):
@@ -61,6 +63,11 @@ class AccessInput(BaseModel):
 
 def install_extra_routes(app, authenticated, admin):
     engine = app.state.engine
+
+    def access_actor(project_id:int,request:Request,user=Depends(authenticated)):
+        if request.url.path.startswith('/api/admin/') and user['role']!='admin':
+            raise HTTPException(403,'Administrator required')
+        return user
 
     def audit(db, actor, kind, summary):
         db.add(Event(kind=kind, state="ok", created=now(), summary=f"{actor}: {summary}"))
@@ -134,20 +141,21 @@ def install_extra_routes(app, authenticated, admin):
 
     # ---- project access by group (admin) ------------------------------------------
     @app.get("/api/admin/projects/{project_id}/access")
-    def get_access(project_id: int, actor=Depends(admin)):
+    @app.get("/api/projects/{project_id}/access")
+    def get_access(project_id: int, actor=Depends(access_actor)):
         with Session(engine) as db:
-            if not db.get(Project, project_id):
-                raise HTTPException(404, "Project not found")
+            from .project_management import require_manager
+            require_manager(db,actor,project_id)
             groups = sorted(db.scalars(select(ProjectAccess.group_id).where(ProjectAccess.project_id == project_id)))
             policy = db.get(ProjectPolicy, project_id)
             return {"group_ids": groups, "restricted": bool(groups or (policy and policy.restricted))}
 
     @app.put("/api/admin/projects/{project_id}/access")
-    def set_access(project_id: int, data: AccessInput, actor=Depends(admin)):
+    @app.put("/api/projects/{project_id}/access")
+    def set_access(project_id: int, data: AccessInput, actor=Depends(access_actor)):
         with Session(engine) as db:
-            p = db.get(Project, project_id)
-            if not p:
-                raise HTTPException(404, "Project not found")
+            from .project_management import require_manager
+            p = require_manager(db,actor,project_id)
             wanted = set(data.group_ids)
             restricted = bool(wanted) if data.restricted is None else data.restricted
             if wanted and not restricted:

@@ -174,6 +174,11 @@ def install_team_routes(app, settings, authenticated):
                 raise HTTPException(404, "User not found")
             if target.username == actor["username"]:
                 raise HTTPException(409, "Cannot delete current account")
+            from .models import ProjectOwner,ProjectJob
+            if db.scalar(select(ProjectOwner.project_id).where(ProjectOwner.user_id==user_id).limit(1)) is not None:
+                raise HTTPException(409,'Reassign owned projects before deleting account')
+            for job in db.scalars(select(ProjectJob).where(ProjectJob.actor_id==user_id,ProjectJob.state.in_(['pending','running']),ProjectJob.cleanup==0)):
+                job.state,job.finished='cancelled',datetime.now(timezone.utc).isoformat()
             blocked = set(db.scalars(select(BlockedUser.user_id)))
             if target.role == "admin" and target.id not in blocked and sum(u.role == "admin" and u.id not in blocked for u in all_users) <= 1:
                 raise HTTPException(409, "Cannot delete last administrator")

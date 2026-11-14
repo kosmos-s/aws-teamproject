@@ -1,6 +1,6 @@
 # 포털 데이터 모델 — 2026-11-12 개선안
 
-현재 모델은 35개 테이블이다. 배포 여부는 STATUS.md의 최신 검증 기록을 따른다. 기존 8개 테이블 설명은 현재 전체 스키마가 아니다.
+현재 로컬 모델은 39개 테이블이다. 운영 배포는 이전 35개 테이블 기준이며 아래 추가 기능은 미배포다. 배포 여부는 STATUS.md의 최신 검증 기록을 따른다. 기존 8개 테이블 설명은 현재 전체 스키마가 아니다.
 
 ## 관계 개요
 
@@ -82,3 +82,8 @@ erDiagram
 `upload_records`는 활성 파일 용량을 집계하고 `object_deletions`는 실패한 실제 파일 삭제를 재시도한다. `change_notices`와 `notice_reads`는 다음 접속에도 남는 변경 내역과 계정별 확인 위치를 보관한다.
 
 Orca 내부 DB·AI 자격증명은 이 모델에 포함하지 않는다. 프로젝트 공개 범위는 포털 자료의 권한이며 공유 Orca 계정의 서버 파일 격리를 의미하지 않는다. 백업 v3의 범위와 제외 항목은 [보안·운영 개선](review-hardening.md)을 따른다.
+
+
+## 소유권·저장소 추가 메타데이터 (2026-11-14)
+
+`project_owners`는 프로젝트당 소유자 1명을 기록한다. `project_repositories`는 정규화 GitHub URL·예약 폴더·revision을 기록한다. `project_deploy_keys`는 세대·공개키·지문·상태만 기록한다. `project_jobs`는 고정된 네 작업(link/key_create/key_verify/key_remove)의 대기·실행·실패/완료 상태를 기록한다. 프로젝트 삭제 후 키 정리 작업이 살아남도록 작업 테이블의 project_id/actor_id는 의도적으로 FK가 아니다. 기존 테이블을 바꾸지 않는다. 백업 v4와 권한 경계는 [소유권 안내](project-ownership.md)를 따른다.

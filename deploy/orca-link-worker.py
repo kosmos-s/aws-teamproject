@@ -33,9 +33,12 @@ def now():
 def as_orca(args, timeout):
     import pwd  # Linux only; imported here so the module loads in tests on any OS
     uid = pwd.getpwnam("orca").pw_uid
-    env = ["env", f"XDG_RUNTIME_DIR=/run/user/{uid}", f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
-           "GIT_TERMINAL_PROMPT=0", "HOME=/home/orca"]
-    return subprocess.run(["runuser", "-u", "orca", "--"] + env + args, capture_output=True, text=True, timeout=timeout)
+    child_env={"PATH":"/usr/local/bin:/usr/bin:/bin","LANG":"C.UTF-8","HOME":"/home/orca",
+               "XDG_RUNTIME_DIR":f"/run/user/{uid}","DBUS_SESSION_BUS_ADDRESS":f"unix:path=/run/user/{uid}/bus",
+               "GIT_TERMINAL_PROMPT":"0","GIT_CONFIG_NOSYSTEM":"1","GIT_CONFIG_GLOBAL":"/dev/null"}
+    clean=["/usr/bin/env","-i"]+[f"{key}={value}" for key,value in child_env.items()]
+    return subprocess.run(["/usr/sbin/runuser", "-u", "orca", "--"]+clean+args,
+                          env=child_env,capture_output=True,text=True,timeout=timeout)
 
 
 def origin_of(path):
@@ -68,9 +71,26 @@ def publish_folders():
     tmp.replace(target)
 
 
+def require_legacy_request(db, req):
+    from sqlalchemy import select
+    from app.models import Project, ProjectRepository, OrcaLinkRequest
+    identity=req.id
+    db.rollback()  # Fresh snapshot before either checking or publishing a link.
+    current=db.get(OrcaLinkRequest,identity)
+    if not current or current.state not in {'pending','running'}:
+        raise RuntimeError('Orca 연결 요청이 취소됐습니다')
+    if not db.scalar(select(Project).where(Project.id==current.project_id).with_for_update()):
+        raise RuntimeError('포털 프로젝트가 없습니다')
+    if db.get(ProjectRepository,current.project_id):
+        raise RuntimeError('프로젝트 저장소 설정이 변경됐습니다')
+    return current
+
+
 def process(db, req):
     from app.orca_admin import normalize_repo, valid_folder, NEW_FOLDER, EXISTING_FOLDER
     from app.models import OrcaProject, Project
+    req = require_legacy_request(db,req)
+    db.rollback()  # Do not keep the project lock during external commands.
     mode = "new" if req.repository_url == NEW_FOLDER else "existing" if req.repository_url == EXISTING_FOLDER else "github"
     url = normalize_repo(req.repository_url)[0] if mode == "github" else ""
     if not valid_folder(req.folder):
@@ -108,6 +128,7 @@ def process(db, req):
     r = as_orca(["orca-ide", "repo", "add", "--path", str(target), "--json"], 90)
     if r.returncode != 0 and "already" not in (r.stdout + r.stderr).lower():
         raise RuntimeError("Orca 등록 실패: " + short(r.stderr or r.stdout))
+    req = require_legacy_request(db,req)
     existing = db.get(OrcaProject, req.project_id)
     if existing:
         existing.label, existing.repository_url = req.folder, url
@@ -116,13 +137,17 @@ def process(db, req):
     return f"{step} · Orca 등록 · 포털 연결 완료 ({target})"
 
 
-def main():
+def main_locked():
     load_env()
     from sqlalchemy import create_engine, select
     from sqlalchemy.orm import Session
     from app.models import Base, OrcaLinkRequest, Event
     engine = create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
     Base.metadata.create_all(engine)
+    from app.repository_worker import run_one
+    if run_one(engine,as_orca):
+        engine.dispose()
+        return
     try:
         publish_folders()
     except Exception:
@@ -153,6 +178,15 @@ def main():
         db.add(Event(kind="orca-link", state="ok" if req.state == "done" else "failed", created=now(),
                      summary=f"request {req.id} {req.repository_url} -> {req.folder}: {req.state}"))
         db.commit()
+
+
+def main():
+    import fcntl
+    fd=os.open('/run/kosmos-orca-link-worker.lock',os.O_CREAT|os.O_WRONLY|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,'w') as lock:
+        try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:return
+        main_locked()
 
 
 if __name__ == "__main__":

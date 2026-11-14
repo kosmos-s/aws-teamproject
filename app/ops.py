@@ -22,6 +22,9 @@ BUSINESS = [Project, Note, Attachment, ProjectArchive, NoteEdit, TeamGroup, Grou
             ProjectAccess, ProjectPolicy, Task, AttachmentOwner, ChatMessage, ChatAttachment,
             ChatReply, ChatReaction, ChatEdit, ChatPin, ChatRead, Profile, UserPreference, UploadRecord, OrcaProject]
 BUSINESS += [ChangeNotice,NoticeRead]
+BUSINESS_V3 = tuple(BUSINESS)
+from .models import ProjectOwner,ProjectRepository,ProjectDeployKey
+BUSINESS += [ProjectOwner,ProjectRepository,ProjectDeployKey]
 
 
 def file_inventory(tables):
@@ -93,6 +96,10 @@ def backup(engine, storage):
                     query=query.where(UploadRecord.key.in_(refs))
                 for r in conn.execute(query.limit(10001)).mappings():
                     row = dict(r)
+                    if model is ProjectDeployKey:
+                        row.update(public_key='',fingerprint='',state='needs_registration',verified_at=None)
+                    elif model is ProjectRepository:
+                        row['state']='restore_required'
                     estimated += len(json.dumps(row, ensure_ascii=False).encode()) + 4
                     if model in (Attachment, ChatAttachment):
                         estimated += ((row["size"] + 2) // 3) * 4 + 256
@@ -102,6 +109,7 @@ def backup(engine, storage):
                         raise ValueError("Backup exceeds lab size budget")
                     rows.append(row)
                 tables[model.__tablename__] = rows
+            tables['orca_projects']=[]  # Workspaces and SSH private keys are outside business recovery.
             kept = {r['id'] for r in tables['chat_messages']}
             for name in ('chat_attachments','chat_reactions','chat_edits'):
                 tables[name]=[r for r in tables[name] if r['message_id'] in kept]
@@ -123,7 +131,7 @@ def backup(engine, storage):
             if estimated > budget:
                 raise ValueError("Backup actual objects exceed size budget")
             files[key] = {"content": base64.b64encode(data).decode(), "sha256": hashlib.sha256(data).hexdigest()}
-        payload = json.dumps({"version": 3, "tables": tables, "files": files, 'identities':identities,
+        payload = json.dumps({"version": 4, "tables": tables, "files": files, 'identities':identities,
                               'policy':{'private_dm':'excluded','credentials':'excluded','restored_accounts':'blocked'}}, ensure_ascii=False).encode()
         if len(payload) > 16 * 1024 * 1024:
             raise ValueError("Backup exceeds 16 MiB lab limit")
@@ -143,8 +151,9 @@ def restore(engine, storage, archive):
         payload = json.loads(archive)
         base = {"projects", "work_notes", "attachments"}
         v2 = base | {m.__tablename__ for m in EXTRA}
-        v3={m.__tablename__ for m in BUSINESS}
-        if not ((payload["version"] == 1 and set(payload["tables"]) == base) or (payload["version"] == 2 and set(payload["tables"]) == v2) or (payload['version']==3 and set(payload['tables'])==v3)):
+        v3={m.__tablename__ for m in BUSINESS_V3}
+        v4={m.__tablename__ for m in BUSINESS}
+        if not ((payload["version"] == 1 and set(payload["tables"]) == base) or (payload["version"] == 2 and set(payload["tables"]) == v2) or (payload['version']==3 and set(payload['tables'])==v3) or (payload['version']==4 and set(payload['tables'])==v4)):
             raise ValueError("Unsupported backup")
         tables, files = payload["tables"], payload["files"]
         if any(not isinstance(rows,list) or len(rows)>10000 for rows in tables.values()): raise ValueError('Invalid row count')
@@ -164,10 +173,10 @@ def restore(engine, storage, archive):
     with engine.begin() as conn:
         selected={m.__tablename__:m.__table__ for m in BUSINESS if m.__tablename__ in tables}
         ordered=[t for t in Base.metadata.sorted_tables if t.name in selected]
-        for table in ordered + ([User.__table__] if payload['version']==3 else []):
+        for table in ordered + ([User.__table__] if payload['version']>=3 else []):
             if conn.execute(select(table).limit(1)).first():
                 raise ValueError("Restore target must be empty")
-        if payload['version']==3:
+        if payload['version']>=3:
             from .security import password_hash
             identities=payload.get('identities',[])
             if len(identities)>10000: raise ValueError('Too many identities')

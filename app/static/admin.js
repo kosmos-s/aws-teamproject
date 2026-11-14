@@ -282,17 +282,17 @@ async function openAccessEditor(node, project) {
   if (node.querySelector('.group-editor')) return;
   live.editing = true;
   let groups, current;
-  try { [groups, current] = await Promise.all([api('/api/admin/groups'), api(`/api/admin/projects/${project.id}/access`)]); }
+  try { [groups, current] = await Promise.all([api(`/api/projects/${project.id}/access/groups`), api(`/api/projects/${project.id}/access`)]); }
   catch (error) { live.editing = false; message(error.message); return; }
   const ed = document.createElement('div'); ed.className = 'group-editor';
-  const help = document.createElement('small'); help.textContent = '제한 공개에서 그룹을 모두 없애도 공개되지 않습니다. 관리자는 항상 볼 수 있습니다. 공개 범위는 포털 자료에 적용됩니다.';
+  const help = document.createElement('small'); help.textContent = '제한 공개에서 그룹을 모두 없애도 공개되지 않습니다. 소유자와 관리자는 항상 볼 수 있습니다. 공개 범위는 포털 자료에 적용됩니다.';
   const picks = document.createElement('div'); picks.className = 'picks';
   const chosen = new Set(current.group_ids);
   const mode = document.createElement('select'); mode.setAttribute('aria-label','프로젝트 공개 범위');
   for (const [value,label] of [['restricted','선택한 그룹만'],['public','전체 회원']]) { const option=document.createElement('option'); option.value=value; option.textContent=label; mode.append(option); }
   mode.value=current.restricted?'restricted':'public';
   const preview=document.createElement('p'); preview.setAttribute('aria-live','polite');
-  const updatePreview=()=> { const ids=new Set(groups.filter(g=>chosen.has(g.id)).flatMap(g=>g.user_ids)); preview.textContent=mode.value==='public'?'모든 회원과 관리자에게 공개됩니다.':`선택한 그룹의 ${ids.size}명과 관리자만 볼 수 있습니다.${ids.size?'':' 일반 회원은 볼 수 없습니다.'}`; picks.hidden=mode.value==='public'; };
+  const updatePreview=()=> { const ids=new Set(groups.filter(g=>chosen.has(g.id)).flatMap(g=>g.user_ids)); preview.textContent=mode.value==='public'?'모든 회원과 관리자에게 공개됩니다.':`선택한 그룹의 ${ids.size}명과 소유자·관리자만 볼 수 있습니다.${ids.size?'':' 그룹 미지정 시 소유자·관리자만 봅니다.'}`; picks.hidden=mode.value==='public'; };
   mode.addEventListener('change',updatePreview);
 
   for (const g of groups) {
@@ -308,7 +308,7 @@ async function openAccessEditor(node, project) {
   save.addEventListener('click', async () => {
     save.disabled = true;
     try {
-      await api(`/api/admin/projects/${project.id}/access`, {method:'PUT', body:{group_ids:mode.value==='restricted'?[...chosen]:[],restricted:mode.value==='restricted'}});
+      await api(`/api/projects/${project.id}/access`, {method:'PUT', body:{group_ids:mode.value==='restricted'?[...chosen]:[],restricted:mode.value==='restricted'}});
       live.editing = false; await refresh();
       message(`${project.name}: 공개 범위를 저장했습니다.`);
     } catch (error) { message(error.message); save.disabled = false; }

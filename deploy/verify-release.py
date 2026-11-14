@@ -34,7 +34,7 @@ def main():
                     target, Storage(Settings(data_dir=path / "objects")), payload
                 )
                 print(
-                    f"Backup v3 and isolated restore verified: {len(counts)} tables; {sum(counts.values())} rows; {len(payload)} bytes"
+                    f"Backup v4 and isolated restore verified: {len(counts)} tables; {sum(counts.values())} rows; {len(payload)} bytes"
                 )
             finally:
                 target.dispose()
