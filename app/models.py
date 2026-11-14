@@ -300,3 +300,47 @@ class NoticeRead(Base):
 
 Index('ix_chat_room_id', ChatMessage.room, ChatMessage.id)
 Index('ix_chat_dm_recipient_sender_id', ChatMessage.recipient_id, ChatMessage.sender_id, ChatMessage.id)
+
+
+class ProjectOwner(Base):
+    __tablename__ = 'project_owners'
+    project_id = Column(Integer, ForeignKey('projects.id'), primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    assigned_at = Column(String(40), nullable=False)
+
+
+class ProjectRepository(Base):
+    __tablename__ = 'project_repositories'
+    project_id = Column(Integer, ForeignKey('projects.id'), primary_key=True)
+    repository_url = Column(String(255), nullable=False)
+    folder = Column(String(100), nullable=False, unique=True)
+    revision = Column(Integer, nullable=False, default=1)
+    state = Column(String(30), nullable=False, default='pending')
+
+
+class ProjectDeployKey(Base):
+    __tablename__ = 'project_deploy_keys'
+    project_id = Column(Integer, ForeignKey('projects.id'), primary_key=True)
+    generation = Column(Integer, nullable=False, default=1)
+    public_key = Column(Text, nullable=False, default='')
+    fingerprint = Column(String(100), nullable=False, default='')
+    state = Column(String(30), nullable=False, default='pending')
+    created = Column(String(40), nullable=False)
+    verified_at = Column(String(40), nullable=True)
+
+
+class ProjectJob(Base):
+    """Only fixed repository/key operations. No private keys or arbitrary command input."""
+    __tablename__ = 'project_jobs'
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, nullable=False, index=True)
+    actor_id = Column(Integer, nullable=False)
+    revision = Column(Integer, nullable=False)
+    kind = Column(String(20), nullable=False)
+    generation = Column(Integer, nullable=False, default=0)
+    cleanup = Column(Integer, nullable=False, default=0)
+    state = Column(String(20), nullable=False, default='pending', index=True)
+    detail = Column(String(500), nullable=False, default='')
+    created = Column(String(40), nullable=False)
+    started = Column(String(40), nullable=True)
+    finished = Column(String(40), nullable=True)

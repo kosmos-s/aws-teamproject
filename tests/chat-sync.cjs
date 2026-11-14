@@ -34,7 +34,7 @@ vm.runInContext(declaration('chatLoad') + '\n' + declaration('chatReload'), cont
   const appSource = fs.readFileSync('app/static/app.js', 'utf8').replace(/\r\n/g, '\n');
   const start = appSource.indexOf('function showLogin()');
   const nodes = new Map();
-  const node = id => {if(!nodes.has(id))nodes.set(id,{textContent:'old-sensitive-value',value:'old-sensitive-value',hidden:false,reset(){this.resetCalled=true;}});return nodes.get(id);};
+  const node = id => {if(!nodes.has(id))nodes.set(id,{textContent:'old-sensitive-value',value:'old-sensitive-value',hidden:false,reset(){this.resetCalled=true;},replaceChildren(){this.textContent='';}});return nodes.get(id);};
   const logoutContext = vm.createContext({$:node,currentUser:{username:'first'},csrf:'old',live:{last:{}},document:{title:'old'}});
   vm.runInContext(appSource.slice(start,appSource.indexOf('\n}\n',start)+3),logoutContext);
   logoutContext.showLogin();
@@ -42,5 +42,6 @@ vm.runInContext(declaration('chatLoad') + '\n' + declaration('chatReload'), cont
   assert.equal(node('totp-setup').hidden,true);
   assert.equal(node('recovery-codes').textContent,'');
   assert.equal(node('reauth-password').value,'');
+  assert.equal(node('projects').textContent,'');
   console.log('logout clears factor material: passed');
 })().catch(error => {console.error(error); process.exitCode = 1;});

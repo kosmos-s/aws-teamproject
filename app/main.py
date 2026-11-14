@@ -39,6 +39,14 @@ class LoginInput(BaseModel):
 class ProjectInput(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=2000)
+    repository_url: str = Field(default="", max_length=255)
+
+    @field_validator('repository_url')
+    @classmethod
+    def github_url(cls,value):
+        if not value.strip():return ''
+        from .orca_admin import normalize_repo
+        return normalize_repo(value)[0]
 
     @field_validator("name")
     @classmethod
@@ -256,9 +264,12 @@ def create_app(settings=None):
                 access.setdefault(pa.project_id, []).append(names.get(pa.group_id, "?"))
             mappings = {o.project_id:o for o in db.scalars(select(OrcaProject))}
             policies = {o.project_id:o.restricted for o in db.scalars(select(ProjectPolicy))}
+            from .models import ProjectOwner
+            owners=dict(db.execute(select(ProjectOwner.project_id,User.username).join(User,User.id==ProjectOwner.user_id)).all())
             return [{"id": p.id, "name": p.name, "description": p.description, "created": p.created,
                      "archived": p.id in archived, "access_groups": sorted(access.get(p.id, [])),
                      "restricted":bool(access.get(p.id) or policies.get(p.id)),
+                     "owner":owners.get(p.id),"can_manage":user['role']=='admin' or (user['role']=='member' and owners.get(p.id)==user['username']),
                      "orca_available": p.id in mappings,
                      "repository_url": mappings[p.id].repository_url if p.id in mappings else None}
                     for p in db.scalars(select(Project).order_by(Project.id)) if visible is None or p.id in visible]
@@ -266,8 +277,15 @@ def create_app(settings=None):
     @app.post("/api/projects", status_code=201)
     def add_project(data: ProjectInput, request:Request, user=Depends(authenticated)):
         with Session(engine) as db:
+            db.scalar(select(User).where(User.id==user['id']).with_for_update())
             p = Project(name=data.name, description=data.description, created=now())
             db.add(p)
+            db.flush()
+            from .models import ProjectOwner
+            db.add(ProjectOwner(project_id=p.id,user_id=user['id'],assigned_at=now()))
+            if data.repository_url:
+                from .project_management import configure_repository
+                configure_repository(db,user,p.id,data.repository_url)
             db.commit()
             request.state.notice_target={'project_id':p.id,'kind':'projects','title':'프로젝트 추가','admin_only':0}
             return {"id": p.id, "name": p.name}
@@ -384,4 +402,6 @@ def create_app(settings=None):
     install_routes(app, authenticated, hardening_admin)
     from .notices import install_routes as install_notices
     install_notices(app,authenticated,hardening_admin)
+    from .project_management import install_routes as install_project_management
+    install_project_management(app,authenticated,hardening_admin)
     return app

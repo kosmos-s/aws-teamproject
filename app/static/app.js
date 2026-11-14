@@ -37,6 +37,17 @@ async function api(path, options = {}) {
   return data;
 }
 const ERRORS = {
+  'Project owner or administrator required':'프로젝트 소유자 또는 관리자만 관리할 수 있습니다.',
+  'Owner must be an active developer':'활성 상태인 일반 회원이나 관리자를 소유자로 선택하세요.',
+  'Reassign owned projects before deleting account':'소유 프로젝트를 다른 회원에게 이전한 뒤 계정을 삭제하세요.',
+  'Project operation already pending':'이 프로젝트의 작업이 진행 중입니다. 완료 후 다시 요청하세요.',
+  'Workspace limit reached':'사용자당 연결 가능한 저장소 수 한도에 도달했습니다.',
+  'Project confirmation mismatch':'프로젝트 이름이 일치하지 않습니다.',
+  'Unlink repository before changing URL':'기존 연결을 해제한 뒤 다른 GitHub 주소를 설정하세요.',
+  'Configure repository first':'먼저 GitHub 주소를 설정하세요.',
+  'Create deploy key first':'먼저 서버 키를 준비하세요.',
+  'Deploy key already exists':'이미 준비한 키가 있습니다. 기존 키 상태를 확인하세요.',
+  'Use project repository settings':'프로젝트 카드의 프로젝트 설정에서 연결을 관리하세요.',
   'Invalid credentials': '아이디 또는 비밀번호가 올바르지 않습니다.',
   'Try again in five minutes': '로그인 실패가 많아 5분 동안 막혔습니다. 잠시 후 다시 시도하세요.',
   'Account temporarily locked': '이 계정은 로그인 실패가 많아 15분 동안 잠겼습니다. 관리자에게 문의하거나 잠시 후 다시 시도하세요.',
@@ -107,6 +118,9 @@ function applySession(session) {
   $('logout').hidden = false;
 }
 function showLogin() {
+  if(typeof closeProjectEditors==='function')closeProjectEditors();
+  live.editing=false;
+  for(const id of ['projects','archived-projects','notes','files','events','home-notes','home-orca','team-notices'])$(id)?.replaceChildren?.();
   $('totp-secret').textContent = ''; $('totp-setup').hidden = true;
   $('totp-enable-form').reset(); $('totp-disable-form').reset();
   if ($('reauth-password')) $('reauth-password').value = '';
@@ -191,7 +205,8 @@ async function refresh() {
   const projectNode = (p) => {
     const node = record(p.name, p.description, new Date(p.created).toLocaleString());
     node.dataset.projectId = p.id;
-    if(p.restricted && !p.access_groups?.length) { const locked=document.createElement('small');locked.textContent='제한 공개 · 허용 그룹 없음 (관리자만)';node.append(locked); }
+    const owner = document.createElement('small'); owner.textContent = p.owner ? `소유자: ${p.owner}` : '소유자 미지정 · 관리자 지정 필요'; node.append(owner);
+    if(p.restricted && !p.access_groups?.length) { const locked=document.createElement('small');locked.textContent=p.owner?'제한 공개 · 소유자와 관리자만':'제한 공개 · 관리자만';node.append(locked); }
     const actions = document.createElement('div'); actions.className = 'record-actions';
     if (p.access_groups?.length) { const chips = document.createElement('div'); for (const g of p.access_groups) { const c = document.createElement('span'); c.className = 'chip lock'; c.textContent = '공개: ' + g; chips.append(c); } node.append(chips); }
     if (!p.archived && p.orca_available && currentUser?.role !== 'viewer') {
@@ -209,7 +224,7 @@ async function refresh() {
       actions.append(button);
       if (p.repository_url && p.repository_url.startsWith('https://')) {const link=document.createElement('a');link.href=p.repository_url;link.textContent='GitHub';link.className='button-link secondary';link.target='_blank';link.rel='noopener noreferrer';actions.append(link);}
     }
-    if (isAdmin) {
+    if (p.can_manage) {
       const b = document.createElement('button'); b.className = 'secondary'; b.textContent = p.archived ? '복원' : '보관';
       b.addEventListener('click', async () => {
         if (!p.archived && !window.confirm(`${p.name} 프로젝트를 보관할까요? 목록에서 숨겨지고 메모·첨부는 남습니다.`)) return;
@@ -224,6 +239,7 @@ async function refresh() {
         actions.append(acc);
       }
     }
+    if (p.can_manage) { const manage = document.createElement('button'); manage.type='button'; manage.className='secondary'; manage.textContent='프로젝트 설정'; manage.addEventListener('click',()=>openProjectManager(node,p)); actions.append(manage); }
     if (actions.children.length) node.append(actions);
     return node;
   };

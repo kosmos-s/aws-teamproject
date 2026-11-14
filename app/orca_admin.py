@@ -87,8 +87,10 @@ def install_orca_admin_routes(app, admin):
         if not valid_folder(folder):
             raise HTTPException(422, "Invalid folder name")
         with Session(engine) as db:
-            if not db.get(Project, data.project_id):
+            if not db.scalar(select(Project).where(Project.id==data.project_id).with_for_update()):
                 raise HTTPException(404, "Project not found")
+            from .models import ProjectRepository
+            if db.get(ProjectRepository,data.project_id):raise HTTPException(409,'Use project repository settings')
             if db.get(OrcaProject, data.project_id):
                 raise HTTPException(409, "Project already linked to Orca")
             busy = db.scalar(select(OrcaLinkRequest).where(OrcaLinkRequest.state.in_(["pending", "running"]),
@@ -106,6 +108,8 @@ def install_orca_admin_routes(app, admin):
     @app.delete("/api/admin/orca-projects/{project_id}")
     def unlink(project_id: int, actor=Depends(admin)):
         with Session(engine) as db:
+            from .models import ProjectRepository
+            if db.get(ProjectRepository,project_id):raise HTTPException(409,'Use project repository settings')
             row = db.get(OrcaProject, project_id)
             if not row:
                 raise HTTPException(404, "Orca link not found")

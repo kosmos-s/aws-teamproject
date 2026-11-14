@@ -125,8 +125,10 @@ def install_teamwork_routes(app, authenticated, admin):
 
     # ---- project archive (admin) ----------------------------------------------------
     @app.post("/api/projects/{project_id}/archive")
-    def archive(project_id: int, actor=Depends(admin)):
+    def archive(project_id: int, actor=Depends(authenticated)):
         with Session(engine) as db:
+            from .project_management import require_manager
+            require_manager(db,actor,project_id)
             if not db.get(Project, project_id):
                 raise HTTPException(404, "Project not found")
             if not db.get(ProjectArchive, project_id):
@@ -136,8 +138,10 @@ def install_teamwork_routes(app, authenticated, admin):
             return {"ok": True}
 
     @app.delete("/api/projects/{project_id}/archive")
-    def unarchive(project_id: int, actor=Depends(admin)):
+    def unarchive(project_id: int, actor=Depends(authenticated)):
         with Session(engine) as db:
+            from .project_management import require_manager
+            require_manager(db,actor,project_id)
             if not db.get(ProjectArchive, project_id):
                 raise HTTPException(404, "Project not archived")
             db.execute(delete(ProjectArchive).where(ProjectArchive.project_id == project_id))
