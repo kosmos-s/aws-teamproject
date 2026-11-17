@@ -41,7 +41,10 @@ for folder,dirs,files in os.walk(sys.argv[1],followlinks=False):
 PY
 # Existing locked dependencies are unchanged; install the added crypto dependency before stopping anything.
 (umask 022; .venv/bin/python -m pip install --disable-pip-version-check -r "$stage/requirements.lock" >/dev/null)
-tar -czf "$backup" app requirements.lock
+backup_paths=(app requirements.lock)
+# Worker/verification source is versioned with the app and must roll back with it.
+if [[ -d deploy ]]; then backup_paths+=(deploy); fi
+tar -czf "$backup" "${backup_paths[@]}"
 chmod 600 "$backup"
 
 as_portal() {
