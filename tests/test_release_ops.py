@@ -36,8 +36,10 @@ class ReleaseOperationsTests(unittest.TestCase):
             host = root / "host"
             host.mkdir()
             (host / "app").mkdir()
+            (host / "deploy").mkdir()
             (host / ".venv/bin").mkdir(parents=True)
             (host / "app/value.py").write_text("old\n")
+            (host / "deploy/orca-link-worker.py").write_text("old worker\n")
             (host / "requirements.lock").write_text("")
             stub = root / "commands"
             stub.mkdir()
@@ -67,6 +69,7 @@ Path('factor-compatibility-restored').write_text('yes')
                 "app/value.py": b"new\n",
                 "requirements.lock": b"",
                 "deploy/totp-compat.py": helper,
+                "deploy/orca-link-worker.py": b"new worker\n",
             }
             manifest = {
                 "base": {
@@ -126,6 +129,11 @@ Path('factor-compatibility-restored').write_text('yes')
             self.assertTrue(
                 (host / "factor-compatibility-restored").exists(),
                 result.stdout + result.stderr,
+            )
+            self.assertEqual(
+                (host / "deploy/orca-link-worker.py").read_text(),
+                "old worker\n",
+                "Failed release left the worker incompatible with restored app code",
             )
             if os.name != "nt":
                 self.assertEqual(
