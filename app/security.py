@@ -51,7 +51,7 @@ def totp_code(secret, at=None, step=30, digits=6):
 
 def totp_verify(secret, code, window=1, at=None):
     code = "".join(ch for ch in str(code or "") if ch.isdigit())
-    if len(code) != 6:
+    if len(code) != 6 or not code.isascii():
         return False
     now = at if at is not None else _time.time()
     return any(hmac.compare_digest(totp_code(secret, now + k * 30), code) for k in range(-window, window + 1))
