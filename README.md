@@ -1,56 +1,45 @@
-# AWS Team Project — KOSMOS Cloud
+# KOSMOS Cloud
 
-**운영 기록 갱신: 2026-11-11 추가 승인으로 EC2·RDS를 재기동했습니다. 이번 EC2 종료는 15:02:07 KST, RDS 중지 요청은 15:01:14 KST입니다. 이 시각 이후의 실시간 상태를 이 문서만으로 판단하지 마세요. 한시 ALB·CloudFront·정적 S3 시연 자원은 삭제 상태를 유지합니다.**
+KOSMOS Cloud는 AWS EC2 한 대에서 팀이 Orca로 공동 개발하고 프로젝트와 업무를 관리할 수 있도록 만든 운영 포털입니다. Orca는 편집기·터미널·AI 도구 실행을, Webmin은 서버 관리를 담당합니다. 팀은 운영 포털과 API, 데이터 모델, 권한 검사, 저장소 연결, 상태 점검과 백업 기능을 구현했습니다.
 
-대학 과제용 AWS EC2 한 대에 Orca를 실제 배포하는 프로젝트.
+![KOSMOS 운영 대시보드](docs/public-evidence/portal-dashboard.png)
 
-**현재: 공개 HTTPS 포털·RDS·S3·모니터링·논리 백업/복구를 AWS에서 검증했습니다. AI 로그인과 3인 동시 접속은 미검증입니다.**
+## 주요 기능
 
-- [진행 상태](STATUS.md)
-- [실제 검증과 시연 화면](docs/verification.md)
-- [접속·배포 가이드](docs/deployment.md)
-- [비용과 24시간 자동 중지](docs/costs.md)
-- [구성도](docs/architecture.md)
-- [출처와 기여](docs/contributions.md)
-- [에이전트 작업 지침](AGENTS.md)
-- [Orca에서 GitHub 프로젝트 사용하기](docs/orca-workflow.md)
-- [강의 자료 검토와 보완안](docs/course-review.md)
+- **프로젝트 관리** — 소유자와 공개 범위를 설정하고, 연결된 Orca 개발환경과 GitHub 저장소를 엽니다.
+- **팀 협업** — 전체·그룹·1:1 채팅, 계정별 공지 확인 상태, 담당자와 마감일이 있는 할 일, 작업 메모와 첨부 파일을 제공합니다.
+- **접근 관리** — 로그인 상태와 프로젝트 권한을 확인한 뒤 개발환경과 첨부 파일에 접근을 허용합니다. 관리자는 계정과 세션을 관리합니다.
+- **운영과 복구** — 서비스 상태를 정기적으로 점검하고, 업무 데이터와 코드를 백업해 별도 환경에서 복원할 수 있습니다.
 
-프로젝트 폴더에서 `.\scripts\connect.ps1` 실행 후 브라우저 `http://127.0.0.1:6768/` 접속. 현재 PC의 승인된 페어링은 브라우저에 저장되어 있다.
+## 시스템 구성
 
-**자동 중지: 승인된 시각(로컬 배포 설정 참조).** 중지 후 EBS는 보존되어 약 $1.82/월이 남는다.
+브라우저의 HTTPS 요청은 EC2의 Nginx를 거쳐 FastAPI 포털, Orca 또는 Webmin으로 전달됩니다. 포털은 업무 데이터를 비공개 RDS MySQL에 저장하고, 첨부 파일과 백업은 비공개 S3에 보관합니다. 자세한 연결 관계는 [구성도](docs/architecture.md)를 참고하세요.
 
-`.local/`, `vendor/`, 데이터·인증정보는 소스 제출 ZIP이나 Git에 포함하지 않는다. 실제 자원 ID/프로필은 Git 제외 로컬 설정에 보관한다.
+## 사용 방법
 
-저장소: [kosmos-s/aws-teamproject](https://github.com/kosmos-s/aws-teamproject). 공개 포털과 RDS·S3 연동을 검증했습니다. 설치된 Orca와 자체 구현한 포털·운영 코드를 구분합니다. localhost는 Orca용 SSM 주소이고 공개 HTTPS 포털은 별도 서비스입니다. 운영 URL과 계정은 운영자가 전달합니다.
+1. 운영자가 안내한 HTTPS 포털에서 로그인합니다.
+2. **프로젝트 → Orca에서 개발환경 열기**를 선택합니다. 저장소를 연결한 프로젝트는 같은 화면에서 GitHub도 열 수 있습니다.
+3. **대시보드 → 팀 변경사항**에서 공지를 확인하고, **팀 채팅**, **할 일**, **작업 메모**에서 진행 상황을 공유합니다.
+4. 점검·백업 이력은 대시보드에서 최근 3개를 기본으로 보여주고, 목록을 펼치면 최대 100개까지 볼 수 있습니다.
 
-- [포털 운영·복구](docs/portal-operations.md)
-- [데이터 모델](docs/data-model.md)
-- [발표 시연 순서](docs/demo-script.md)
+자세한 화면과 사용 순서는 [사용 안내](docs/user-guide.md)를 참고하세요. 서버 관리자용 SSM 터널과 로컬 접속 절차는 [접속·배포 가이드](docs/deployment.md)에 있습니다.
 
-로컬 검증: Python 3.12 이상에서 가상환경 생성, `pip install -r requirements.lock`, `python -m unittest discover -s tests -v`.
+## 검증 결과
 
-## Orca와 서버 관리 통합
-포털 프로젝트의 **Orca에서 개발환경 열기**로 공유 Orca에 연결하고, 사이드바에서 aws-teamproject를 선택한다. 관리자는 **서버 관리 → Webmin**에서 별도 계정으로 서비스·로그를 확인한다. 현재 구현·실제 검증·미검증 범위는 [연결 검증 기록](docs/orca-access-verification.md)을 따른다. 서버 GitHub 쓰기 인증과 AI 로그인은 아직 완료되지 않았다.
+2026년 11월 18일 기준으로 다음 동작을 확인했습니다.
 
-## 팀 운영 기능
-계정·역할·접속 회수, GitHub 자동 테스트, Git 코드 백업/복구, 외부 장애 알림과 비용·자원 현황을 추가했다. [사용·적용 절차](docs/team-operations.md)와 [Webmin 2FA 등록](docs/webmin-2fa.md)을 참고한다. 서버 배포·원격 CI와 공개 Orca 편집/실행을 검증했다. 실제 메일 발송·TOTP 등록은 미완료다.
+- **AI 개발과 GitHub 반영** — AWS의 Orca에서 Codex가 `demo_add.py`를 작성하고 서버 Python으로 검증 3개를 통과했습니다. 코드와 실행 안내를 담은 README를 예제 저장소에 반영했습니다. [GitHub 예제 저장소](https://github.com/qkrcksdnr0605-dotcom/aws-todolist)
+- **팀 협업** — 팀이 서로 다른 세 계정으로 동시 접속해 대화했고, 계정별 공지 확인 상태와 재로그인 후 새 공지 수신을 직접 확인했습니다.
+- **접근과 복원** — 공개 HTTPS 상태 확인과 비로그인 요청의 보호 경로 접근 차단을 확인했습니다. 업무 백업을 별도 SQLite 환경에 복원해 27개 테이블과 145행을 확인했습니다.
 
-## 2026-11-11 실제 배포 갱신
-팀 운영 기능을 AWS에 적용하고 관리자 API·운영 스냅샷·로그아웃 접근 회수를 확인했다. GitHub 기능 브랜치 push와 CI 실행이 성공했다. 강의 2장의 탄력적 IP를 기존 EC2에 연결했다. DNS가 고정 IP를 가리키며 정상 DNS·TLS 접속을 검증했다. AI 로그인·3인 동시 접속·실제 메일/TOTP 등록은 미완료다.
+## 운영 범위
 
-## 2026-11-11 강의 시연 추가 검증
-사용자 추가 승인으로 ALB와 CloudFront/별도 비공개 S3 OAC를 실제 배포했다. ALB healthy·/health 200, CloudFront Deployed·HTTPS 200, S3 원본 403을 확인했다. 정상 DNS로 포털/Orca 연결, 공개 Orca 터미널 실행과 파일 저장·원본 복구, 로그아웃 후 활성 WebSocket 1008 종료(0.02초)를 검증했다. ALB/CloudFront 시연 자원은 오늘 13:47 종료 후 정리한다. [구성·검증·정리 범위](docs/course-demo.md)
+현재 개발환경과 포털은 단일 EC2에서 운영합니다. Orca가 공유 운영체제 계정을 사용하므로 사용자별 프로세스와 파일 격리는 후속 과제입니다. 장애 알림의 실제 메일 수신과 실계정 2단계 인증 등록은 별도 검증 항목입니다.
 
-## 발표·제출 준비
-발표자: 김건보·강태영·박찬욱. 팀명 없음. [발표 대본과 근거](docs/presentation-script.md), [3인 최종 시연 절차](docs/final-rehearsal.md), [제출 점검표](docs/submission-checklist.md)를 참고한다. 개인별 기여는 실제 기록으로 작성한다.
+## 관련 문서
 
-- [프로그램 구성과 사용 순서](docs/user-guide.md)
-- [과제 공지 평가표 대비 점검](docs/assignment-audit.md)
+- [진행 상태](STATUS.md) · [검증 이력](docs/verification.md) · [과거 AWS 시연 기록](docs/course-demo.md)
+- [Orca와 GitHub 사용법](docs/orca-workflow.md) · [포털 운영·복구](docs/portal-operations.md)
+- [데이터 모델](docs/data-model.md) · [비용과 자동 중지](docs/costs.md) · [출처와 기여](docs/contributions.md)
 
-점검·백업 이력은 대시보드 맨 아래에 있으며 기본 최근 3개, 펼치면 조회된 최근 최대 100개를 볼 수 있다.
-
-발표 자료는 과제 공지 기준 23장·20분 계획으로 다시 작성했다. 최신 [발표 대본](docs/presentation-script.md)과 [공지 대비 검토](docs/assignment-audit.md)를 따른다. 담당 업무·개인별 기여·발표 구간은 사용자 확인 결과 미정이다.
-
-## 2026-11-12 보안·변경사항 개선
-[개선 동작과 백업 v3](docs/review-hardening.md), [현재 35개 테이블 모델](docs/data-model.md), [협업 도구 비교와 후속 후보](docs/product-comparison.md)를 참고한다. 로컬 구현과 실제 배포 상태는 STATUS.md에서 구분한다.
+로컬에서 검증하려면 Python 3.12 이상에서 가상환경을 만들고 `pip install -r requirements.lock`으로 의존성을 설치한 뒤 `python -m unittest discover -s tests -v`를 실행합니다.
