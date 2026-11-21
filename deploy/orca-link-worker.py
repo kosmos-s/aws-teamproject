@@ -7,6 +7,8 @@ Fixed steps only, no shell, no user-controlled arguments beyond validated values
   4. write the portal's orca_projects link and mark the request done/failed
 """
 import os
+import secrets
+import stat
 
 import subprocess
 import sys
@@ -16,6 +18,7 @@ from pathlib import Path
 ROOT = Path("/opt/kosmos-portal")
 sys.path.insert(0, str(ROOT))
 PROJECTS = Path("/home/orca/projects")
+FOLDER_SNAPSHOT_DIR = Path("/run/kosmos-orca-link")
 
 
 def load_env():
@@ -50,25 +53,40 @@ def short(text):
     return " ".join((text or "").split())[-300:]
 
 
-def publish_folders():
-    """Write the list of /home/orca/projects folders where the portal can read it."""
+def write_folder_snapshot(payload, directory=FOLDER_SNAPSHOT_DIR):
+    """Publish through an open, trusted directory; readers only receive group read access."""
     import json
+    dir_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    tmp = None
+    try:
+        st = os.fstat(dir_fd)
+        if (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)) != (os.geteuid(), os.getegid(), 0o750):
+            raise PermissionError("Folder snapshot directory must be owned by the worker and read-only to the portal")
+        tmp_name = ".snapshot-" + secrets.token_hex(16)
+        fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=dir_fd)
+        tmp = tmp_name
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream)
+            stream.flush()
+            os.fchmod(stream.fileno(), 0o640)
+        os.replace(tmp, "orca-folders.json", src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        tmp = None
+    finally:
+        if tmp is not None:
+            os.unlink(tmp, dir_fd=dir_fd)
+        os.close(dir_fd)
+
+
+def publish_folders():
+    """Publish the project list in the dedicated root-owned runtime directory."""
     from app.orca_admin import valid_folder
-    data_dir = Path(os.environ.get("DATA_DIR", "/var/lib/kosmos-portal"))
     items = []
     if PROJECTS.is_dir():
         for d in sorted(PROJECTS.iterdir()):
             if d.is_dir() and not d.is_symlink() and valid_folder(d.name):
                 items.append({"name": d.name, "git": (d / ".git").exists()})
-    target = data_dir / "orca-folders.json"
-    tmp = target.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"updated": now(), "folders": items[:500]}), encoding="utf-8")
-    try:
-        st = data_dir.stat(); os.chown(tmp, st.st_uid, st.st_gid)
-    except (OSError, AttributeError):
-        pass
-    os.chmod(tmp, 0o640)
-    tmp.replace(target)
+    write_folder_snapshot({"updated": now(), "folders": items[:500]})
 
 
 def require_legacy_request(db, req):

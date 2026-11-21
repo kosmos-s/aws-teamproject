@@ -40,10 +40,10 @@ class LinkInput(BaseModel):
     folder: str = Field(default="", max_length=100)
 
 
-def read_folders(data_dir):
+def read_folders(snapshot):
     """Folder list published by the root worker; the portal user cannot read /home/orca itself."""
     try:
-        data = json.loads((data_dir / "orca-folders.json").read_text(encoding="utf-8"))
+        data = json.loads(snapshot.read_text(encoding="utf-8"))
         return {"folders": [f for f in data.get("folders", []) if valid_folder(f.get("name", ""))][:500],
                 "updated": data.get("updated")}
     except (OSError, ValueError, AttributeError):
@@ -52,7 +52,7 @@ def read_folders(data_dir):
 
 def install_orca_admin_routes(app, admin):
     engine = app.state.engine
-    data_dir = app.state.settings.data_dir
+    snapshot = app.state.settings.orca_folders_path
 
     def audit(db, actor, summary):
         db.add(Event(kind="orca-link", state="ok", created=datetime.now(timezone.utc).isoformat(), summary=f"{actor}: {summary}"))
@@ -68,7 +68,7 @@ def install_orca_admin_routes(app, admin):
                 "projects": [{"id": i, "name": n, "linked": i in linked} for i, n in projects.items()],
                 "mappings": [{"project_id": m.project_id, "project": projects.get(m.project_id, "?"), "label": m.label,
                               "repository_url": m.repository_url} for m in maps],
-                "server_folders": read_folders(data_dir),
+                "server_folders": read_folders(snapshot),
                 "requests": [{"id": r.id, "project": projects.get(r.project_id, "?"), "repository_url": r.repository_url,
                               "folder": r.folder, "state": r.state, "detail": r.detail, "requested_by": r.requested_by,
                               "created": r.created, "finished": r.finished} for r in reqs],

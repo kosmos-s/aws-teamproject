@@ -11,6 +11,7 @@ class Settings:
     secure_cookies: bool = True
     bucket: str = ""
     region: str = "ap-northeast-2"
+    orca_folders_path: Path = Path("/run/kosmos-orca-link/orca-folders.json")
 
     @classmethod
     def from_env(cls):
