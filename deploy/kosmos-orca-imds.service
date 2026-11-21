@@ -1,0 +1,16 @@
+[Unit]
+Description=Restrict Orca accounts from EC2 instance metadata
+DefaultDependencies=no
+After=local-fs.target nftables.service
+Before=network-pre.target shutdown.target kosmos-orca-broker.service
+Wants=network-pre.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/kosmos-portal/deploy/orca-imds-firewall.py
+ExecReload=/usr/bin/python3 /opt/kosmos-portal/deploy/orca-imds-firewall.py
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
