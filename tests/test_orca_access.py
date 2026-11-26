@@ -89,6 +89,42 @@ class OrcaAccessTests(unittest.TestCase):
                 pass
         self.assertEqual(context.exception.code, 1008)
 
+    def test_isolated_launch_and_socket_require_the_same_project_access(self):
+        from app.models import OrcaProject, Project, ProjectPolicy
+
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        registry = root / "orca-projects.json"
+        registry.write_text('{"1": 18681, "2": 18682}', encoding="utf-8")
+        app = create_app(Settings(database_url=f"sqlite:///{root / 'isolated.db'}",
+                                  data_dir=root, origin="http://testserver",
+                                  secure_cookies=False, orca_project_registry=registry))
+        self.addCleanup(app.state.engine.dispose)
+        create_user(app.state.engine, "tester", "A-manual-test-password-93")
+        with Session(app.state.engine) as db:
+            db.add_all([Project(id=1, name="Accessible", created="2026-11-21T00:00:00+00:00"),
+                        Project(id=2, name="Private", created="2026-11-21T00:00:00+00:00")])
+            db.flush()
+            for pid in (1, 2):
+                db.add(OrcaProject(project_id=pid, label=f"project-{pid}", repository_url=""))
+            db.add(ProjectPolicy(project_id=2, restricted=1))
+            db.commit()
+        with TestClient(app) as client:
+            client.headers["Origin"] = "http://testserver"
+            self.login(client)
+            with patch("app.orca_gateway.obtain_pairing", return_value={"deviceToken": "synthetic", "publicKeyB64": "public"}) as pair:
+                result = client.post("/api/projects/1/orca")
+                self.assertEqual(result.status_code, 200)
+                payload = result.json()["url"].split("=", 1)[1]
+                self.assertEqual(json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["endpoint"],
+                                 "ws://testserver/orca/runtime/1")
+                pair.assert_called_once_with(Path("/run/kosmos-orca-projects/1/pair.sock"))
+                self.assertEqual(client.post("/api/projects/2/orca").status_code, 404)
+            for path in ("/orca/runtime", "/orca/runtime/2", "/orca/runtime/3"):
+                with self.subTest(path=path), self.assertRaises(WebSocketDisconnect) as context:
+                    with client.websocket_connect(path, headers={"Origin": "http://testserver"}):
+                        pass
+                self.assertEqual(context.exception.code, 1008)
+
     def test_existing_websocket_closes_after_logout(self):
         def echo(socket):
             for message in socket:

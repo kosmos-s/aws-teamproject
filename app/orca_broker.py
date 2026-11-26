@@ -15,7 +15,8 @@ class PairHandler(socketserver.StreamRequestHandler):
         if self.rfile.readline(16) != b"PAIR\n":
             return
         try:
-            node = next(Path("/home/orca/.config/orca/orcad-artifacts/linux-x64-glibc/runtimes").glob("node-*/bin/node"))
+            profile = Path(os.getenv("ORCA_USER_DATA_PATH") or Path.home() / ".config" / "orca")
+            node = next((profile / "orcad-artifacts" / "linux-x64-glibc" / "runtimes").glob("node-*/bin/node"))
             result = subprocess.run([str(node), "/opt/Orca/resources/app.asar.unpacked/out/cli/index.js", "pair", "--address", "127.0.0.1", "--json"],
                                     stdin=subprocess.DEVNULL, capture_output=True, timeout=20, check=True)
             output = json.loads(result.stdout)["result"]
@@ -39,7 +40,7 @@ class PairHandler(socketserver.StreamRequestHandler):
 
 
 def main():
-    path = Path("/run/kosmos-orca-broker/pair.sock")
+    path = Path(os.getenv("ORCA_BROKER_SOCKET", "/run/kosmos-orca-broker/pair.sock"))
     path.unlink(missing_ok=True)
     with socketserver.UnixStreamServer(str(path), PairHandler) as server:
         os.chmod(path, 0o660)

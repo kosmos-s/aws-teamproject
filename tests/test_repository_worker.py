@@ -66,6 +66,33 @@ class WorkerTests(unittest.TestCase):
         ), patch.object(worker, "available_disk", return_value=True):
             self.assertTrue(worker.run_one(self.app.state.engine, self.child))
 
+    def test_isolated_cleanup_targets_only_the_project_runner_and_keys(self):
+        pid = self.project()
+        root = Path(self.tmp.name) / "isolated"
+        keys = root / "keys"
+        keys.mkdir(parents=True)
+        shared = Path(self.tmp.name) / "shared"
+        shared.mkdir()
+        for path in (keys, shared):
+            (path / f"p{pid}-g1.key").touch()
+        with Session(self.app.state.engine) as db:
+            db.add(ProjectJob(project_id=pid, kind="key_remove", state="pending", cleanup=1,
+                              actor_id=self.uid("amy"), revision=1, generation=1, created=worker.now()))
+            db.commit()
+        calls = []
+
+        def workspace(project_id):
+            calls.append(project_id)
+            return self.child, root / "projects", keys
+
+        def shared_child(*args):
+            self.fail("isolated job fell back to the shared runner")
+
+        self.assertTrue(worker.run_one(self.app.state.engine, shared_child, workspace=workspace))
+        self.assertEqual(calls, [pid])
+        self.assertFalse((keys / f"p{pid}-g1.key").exists())
+        self.assertTrue((shared / f"p{pid}-g1.key").exists())
+
     def test_revalidation_ends_old_snapshot_after_ownership_changes(self):
         pid = self.project()
         self.client("amy").post(f"/api/projects/{pid}/deploy-key/create")

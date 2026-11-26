@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import json
+import logging
 import socket
 import threading
 import time
@@ -10,7 +11,8 @@ from fastapi import Depends, HTTPException, WebSocket
 from sqlalchemy.orm import Session
 from websockets.asyncio.client import connect
 
-from .models import LoginSession, User, OrcaProject, Event, BlockedUser
+from .models import Event, OrcaProject
+from .orca_project_runtime import SHARED_SOCKET, SOCKET_ROOT, load_project_ports
 from .security import token_hash
 from datetime import datetime, timezone
 
@@ -19,16 +21,16 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def live_session(engine, cookie):
+def live_session(engine, cookie, project_id=None):
     with Session(engine) as db:
         from .hardening import live_developer
-        return live_developer(db, token_hash(cookie))
+        return live_developer(db, token_hash(cookie), project_id)
 
 
-def obtain_pairing():
+def obtain_pairing(socket_path=SHARED_SOCKET):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(25)
-        connection.connect("/run/kosmos-orca-broker/pair.sock")
+        connection.connect(str(socket_path))
         connection.sendall(b"PAIR\n")
         result = bytearray()
         while True:
@@ -47,6 +49,13 @@ def obtain_pairing():
 def install_orca_routes(app, settings, authenticated):
     engine = app.state.engine
     app.state.orca_upstream = "ws://127.0.0.1:6768"
+    project_ports = None
+    if settings.orca_project_registry is not None:
+        try:
+            project_ports = load_project_ports(settings.orca_project_registry)
+        except (OSError, ValueError):
+            logging.getLogger(__name__).error("Orca project registry unavailable; project runtime access disabled")
+            project_ports = {}
     launch_times = {}
     active = {}
     active_lock = threading.Lock()
@@ -74,18 +83,27 @@ def install_orca_routes(app, settings, authenticated):
             mapping = db.get(OrcaProject, project_id)
             if not mapping:
                 raise HTTPException(409, "This project has no registered Orca workspace")
+            if project_ports is not None and user["role"] not in {"admin", "member"}:
+                raise HTTPException(403, "Developer access required")
+            if project_ports is not None and project_id not in project_ports:
+                raise HTTPException(503, "Project runtime unavailable")
             if time.monotonic() - launch_times.get(user["username"], -1000) < 10:
                 raise HTTPException(429, "Wait ten seconds before pairing again")
             launch_times[user["username"]] = time.monotonic()
             try:
-                offer = obtain_pairing()
+                if project_ports is None:
+                    offer = obtain_pairing()
+                else:
+                    offer = obtain_pairing(SOCKET_ROOT / str(project_id) / "pair.sock")
             except Exception:
                 raise HTTPException(503, "Orca pairing service unavailable")
             scheme = "wss" if settings.origin.startswith("https://") else "ws"
-            offer["endpoint"] = scheme + settings.origin[settings.origin.index(":"):] + "/orca/runtime"
+            runtime_path = "/orca/runtime" if project_ports is None else f"/orca/runtime/{project_id}"
+            offer["endpoint"] = scheme + settings.origin[settings.origin.index(":"):] + runtime_path
             code = base64.urlsafe_b64encode(json.dumps(offer).encode()).decode().rstrip("=")
             label = mapping.label
-            db.add(Event(kind="orca-access", state="ok", created=now(), summary=f"{user['username']} opened registered workspace {mapping.label}; shared runtime access"))
+            access_mode = "shared" if project_ports is None else "project"
+            db.add(Event(kind="orca-access", state="ok", created=now(), summary=f"{user['username']} opened registered workspace {mapping.label}; {access_mode} runtime access"))
             db.commit()
         return {"url": "/orca/web-index.html#pairing=" + code, "workspace": label}
 
@@ -97,10 +115,23 @@ def install_orca_routes(app, settings, authenticated):
 
     @app.websocket("/orca/runtime")
     async def runtime(browser: WebSocket):
+        if project_ports is not None:
+            await browser.close(code=1008)
+            return
+        await relay_runtime(browser, app.state.orca_upstream)
+
+    @app.websocket("/orca/runtime/{project_id}")
+    async def project_runtime(browser: WebSocket, project_id: int):
+        if project_ports is None or project_id not in project_ports:
+            await browser.close(code=1008)
+            return
+        await relay_runtime(browser, f"ws://127.0.0.1:{project_ports[project_id]}", project_id)
+
+    async def relay_runtime(browser: WebSocket, upstream_url, project_id=None):
         cookie = browser.cookies.get("kosmos_session", "")
         async def valid():
             try:
-                return await asyncio.wait_for(asyncio.to_thread(live_session, engine, cookie), timeout=1)
+                return await asyncio.wait_for(asyncio.to_thread(live_session, engine, cookie, project_id), timeout=1)
             except Exception:
                 return False
         if browser.headers.get("origin") != settings.origin or not await valid():
@@ -115,7 +146,7 @@ def install_orca_routes(app, settings, authenticated):
         tasks = []
 
         async def transport():
-            async with connect(app.state.orca_upstream + "?orca-client=web", proxy=None, origin=settings.origin,
+            async with connect(upstream_url + "?orca-client=web", proxy=None, origin=settings.origin,
                                max_size=16 * 1024 * 1024, max_queue=8, open_timeout=5, close_timeout=2) as upstream:
                 async def outgoing():
                     while True:

@@ -1,0 +1,24 @@
+[Unit]
+Description=Orca runtime for KOSMOS project %i
+Requires=kosmos-orca-imds.service
+After=kosmos-orca-imds.service network-online.target
+
+[Service]
+User=kosmos-orca-p%i
+Group=kosmos-orca-p%i
+WorkingDirectory=/var/lib/kosmos-orca-projects/%i
+Environment=HOME=/var/lib/kosmos-orca-projects/%i
+Environment=SHELL=/bin/bash
+Environment=ORCA_USER_DATA_PATH=/var/lib/kosmos-orca-projects/%i/.config/orca
+EnvironmentFile=/etc/kosmos-orca-projects/%i.env
+ExecStart=/usr/bin/orca-ide serve --supervise --no-pairing --bind 0.0.0.0 --pairing-address 127.0.0.1 --port ${ORCA_RUNTIME_PORT} --refuse-public
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+ProtectProc=invisible
+SocketBindDeny=ipv4:tcp:18000-18999
+SocketBindDeny=ipv6:tcp:18000-18999
+
+[Install]
+WantedBy=multi-user.target

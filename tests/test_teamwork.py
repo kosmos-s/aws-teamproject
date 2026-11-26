@@ -21,7 +21,7 @@ PW = "A-team-test-password-93"
 class TeamworkTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.settings = Settings(database_url=f"sqlite:///{self.tmp.name}/p.db", data_dir=Path(self.tmp.name), origin="http://testserver", secure_cookies=False)
+        self.settings = Settings(database_url=f"sqlite:///{self.tmp.name}/p.db", data_dir=Path(self.tmp.name), origin="http://testserver", secure_cookies=False, orca_folders_path=Path(self.tmp.name) / "orca-folders.json")
         self.app = create_app(self.settings)
         for name, role in [("boss", "admin"), ("amy", "member"), ("ben", "member"), ("gus", "viewer")]:
             create_user(self.app.state.engine, name, PW, role)

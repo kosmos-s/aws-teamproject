@@ -4,5 +4,10 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+User=root
+Group=kosmos-portal
+RuntimeDirectory=kosmos-orca-link
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
 ExecStart=/opt/kosmos-portal/.venv/bin/python /opt/kosmos-portal/deploy/orca-link-worker.py
 TimeoutStartSec=600
