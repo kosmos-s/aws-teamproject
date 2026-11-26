@@ -1,0 +1,27 @@
+[Unit]
+Description=Orca browser pairing broker for KOSMOS project %i
+Requires=kosmos-orca-runtime@%i.service
+After=kosmos-orca-runtime@%i.service
+
+[Service]
+User=kosmos-orca-p%i
+Group=kosmos-orca-p%i
+WorkingDirectory=/opt/kosmos-portal
+Environment=HOME=/var/lib/kosmos-orca-projects/%i
+Environment=ORCA_USER_DATA_PATH=/var/lib/kosmos-orca-projects/%i/.config/orca
+Environment=ORCA_BROKER_SOCKET=/run/kosmos-orca-projects/%i/pair.sock
+EnvironmentFile=/etc/kosmos-orca-projects/%i.env
+RuntimeDirectory=kosmos-orca-projects/%i
+RuntimeDirectoryMode=0710
+ExecStartPre=+/usr/bin/setfacl -m u:kosmos-portal:--x,m::--x,d:u:kosmos-portal:rw-,d:m::rw- /run/kosmos-orca-projects/%i
+ExecStart=/usr/bin/python3 /opt/kosmos-portal/app/orca_broker.py
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+ProtectProc=invisible
+SocketBindDeny=ipv4:tcp:18000-18999
+SocketBindDeny=ipv6:tcp:18000-18999
+
+[Install]
+WantedBy=multi-user.target

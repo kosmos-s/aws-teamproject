@@ -1,4 +1,4 @@
-"""Fixed repository/key steps, called only by the existing root timer, as the shared orca user."""
+"""Fixed repository and key operations executed by the registered Orca account."""
 
 import base64
 from datetime import datetime, timezone, timedelta
@@ -36,8 +36,8 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def available_disk():
-    return shutil.disk_usage(PROJECTS).free >= 2 * 1024**3
+def available_disk(projects=None):
+    return shutil.disk_usage(PROJECTS if projects is None else projects).free >= 2 * 1024**3
 
 
 def checked(child, args, timeout=30):
@@ -63,7 +63,7 @@ def write_public(child, path, text, mode="600"):
     )
 
 
-def key_paths(pid, generation):
+def key_paths(pid, generation, keys=None):
     if (
         not isinstance(pid, int)
         or pid <= 0
@@ -71,20 +71,21 @@ def key_paths(pid, generation):
         or generation < 1
     ):
         raise ValueError("Invalid key identity")
-    return KEYS / f"p{pid}-g{generation}.key", KEYS / f"p{pid}.conf"
+    keys = KEYS if keys is None else keys
+    return keys / f"p{pid}-g{generation}.key", keys / f"p{pid}.conf"
 
 
-def ssh_configuration(pid, generation):
-    key, config = key_paths(pid, generation)
+def ssh_configuration(pid, generation, keys=None):
+    key, _ = key_paths(pid, generation, keys)
     return (
         "Host github.com\n  HostName ssh.github.com\n  Port 443\n  User git\n"
         f"  IdentityFile {key}\n  IdentitiesOnly yes\n  BatchMode yes\n"
-        f"  StrictHostKeyChecking yes\n  HostKeyAlias github.com\n  UserKnownHostsFile {KEYS}/github_known_hosts\n  GlobalKnownHostsFile /dev/null\n"
+        f"  StrictHostKeyChecking yes\n  HostKeyAlias github.com\n  UserKnownHostsFile {key.parent}/github_known_hosts\n  GlobalKnownHostsFile /dev/null\n"
     )
 
 
-def git_args(pid, generation, *args):
-    _, config = key_paths(pid, generation)
+def git_args(pid, generation, *args, keys=None):
+    _, config = key_paths(pid, generation, keys)
     # Git invokes this fixed command internally. It contains only a generated integer path, never web text.
     return [
         "git",
@@ -128,7 +129,7 @@ def authorize(db, job):
     return repo, db.get(ProjectDeployKey, job.project_id)
 
 
-def remove_keys(child, pid):
+def remove_keys(child, pid, keys=None):
     if not isinstance(pid, int) or pid <= 0:
         raise ValueError("Invalid project identity")
     cleanup = """from pathlib import Path
@@ -139,15 +140,17 @@ if root.exists():
  for p in root.iterdir():
   if re.fullmatch(r'p'+str(pid)+r'(?:-g[0-9]+\\.key(?:\\.pub)?|\\.conf)',p.name):p.unlink(missing_ok=True)
 """
-    checked(child, ["python3", "-c", cleanup, str(KEYS), str(pid)])
+    checked(child, ["python3", "-c", cleanup, str(KEYS if keys is None else keys), str(pid)])
 
 
-def process(db, job, child):
+def process(db, job, child, *, projects=None, keys=None):
+    projects = PROJECTS if projects is None else projects
+    keys = KEYS if keys is None else keys
     if job.kind not in {"link", "key_create", "key_verify", "key_remove"}:
         raise ValueError("지원하지 않는 고정 작업")
     repo, key = authorize(db, job)
     if job.kind == "key_remove":
-        remove_keys(child, job.project_id)
+        remove_keys(child, job.project_id, keys)
         _, key = authorize(db, job)
         if key:
             key.state = "removed"
@@ -157,15 +160,15 @@ def process(db, job, child):
     url, unused = normalize_repo(repo.repository_url)
     if not valid_folder(repo.folder):
         raise ValueError("Invalid folder")
-    target = PROJECTS / repo.folder
-    if target.is_symlink() or target.resolve().parent != PROJECTS.resolve():
+    target = projects / repo.folder
+    if target.is_symlink() or target.resolve().parent != projects.resolve():
         raise ValueError("Invalid workspace path")
     if job.kind == "key_create":
         if not key or key.generation != job.generation:
             raise ValueError("키 요청이 변경됐습니다")
-        private, config = key_paths(job.project_id, key.generation)
-        checked(child, ["mkdir", "-p", "-m", "700", "--", str(KEYS)])
-        remove_keys(child, job.project_id)
+        private, config = key_paths(job.project_id, key.generation, keys)
+        checked(child, ["mkdir", "-p", "-m", "700", "--", str(keys)])
+        remove_keys(child, job.project_id, keys)
         checked(
             child,
             [
@@ -190,8 +193,8 @@ def process(db, job, child):
         found = re.search(r"SHA256:[A-Za-z0-9+/]+", fingerprint)
         if not found:
             raise ValueError("Invalid public fingerprint")
-        write_public(child, KEYS / "github_known_hosts", GITHUB_HOST_KEY)
-        write_public(child, config, ssh_configuration(job.project_id, key.generation))
+        write_public(child, keys / "github_known_hosts", GITHUB_HOST_KEY)
+        write_public(child, config, ssh_configuration(job.project_id, key.generation, keys))
         authorize(db, job)
         key = db.get(ProjectDeployKey, job.project_id)
         key.public_key = public
@@ -199,7 +202,7 @@ def process(db, job, child):
         key.state = "awaiting_registration"
         key.created = now()
         return "done"
-    if not available_disk():
+    if not available_disk(projects):
         raise ValueError("서버 여유 공간이 2GiB 미만입니다")
     use_key = bool(
         key and key.public_key and key.state not in {"removed", "needs_registration"}
@@ -211,7 +214,7 @@ def process(db, job, child):
             raise ValueError("먼저 키를 준비하고 GitHub에 등록하세요")
         checked(
             child,
-            git_args(job.project_id, key.generation, "ls-remote", "--", ssh_url),
+            git_args(job.project_id, key.generation, "ls-remote", "--", ssh_url, keys=keys),
             60,
         )
         authorize(db, job)
@@ -239,6 +242,7 @@ def process(db, job, child):
                 "--",
                 ssh_url,
                 str(target),
+                keys=keys,
             )
             if use_key
             else [
@@ -270,7 +274,7 @@ def process(db, job, child):
                 "config",
                 "--local",
                 "core.sshCommand",
-                f"ssh -F {key_paths(job.project_id,key.generation)[1]}",
+                f"ssh -F {key_paths(job.project_id, key.generation, keys)[1]}",
             ],
         )
         checked(
@@ -312,7 +316,7 @@ def process(db, job, child):
     return "done"
 
 
-def run_one(engine, child):
+def run_one(engine, child, *, workspace=None):
     from sqlalchemy.orm import Session
     from .models import Event
 
@@ -340,7 +344,11 @@ def run_one(engine, child):
         db.commit()
         identity = job.id
         try:
-            state = process(db, job, child)
+            if workspace is None:
+                state = process(db, job, child)
+            else:
+                project_child, projects, keys = workspace(job.project_id)
+                state = process(db, job, project_child, projects=projects, keys=keys)
             job = db.get(ProjectJob, identity)
             if job.state != "cancelled":
                 job.state = state

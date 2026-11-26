@@ -2,6 +2,8 @@
 
 기준은 `aecc3be1863c8ffc77925d0a20e71a884dd3a956`이다. 배포하는 것은 목록 파일 쓰기 경계의 개선만이다. DB, S3, IAM과 방화벽, Orca 팀원 설정, EC2/RDS 종료 예약은 이 변경의 대상이 아니다.
 
+이 브랜치의 사전점검 스크립트에는 프로젝트 격리 후보와 함께 수정된 포털 설정 및 작업자의 해시가 들어 있다. 스냅샷 점검 자체는 아래 네 파일과 목록 권한만 판정한다. 세 변경을 함께 적용하려면 [프로젝트별 전환 절차](orca-project-cutover.md)와 [메타데이터 제한 절차](orca-imds-release.md)도 따른다.
+
 ## 1. 승인 전에 확인
 
 운영자가 사용할 로컬 프로젝트에 `scripts/inspect-orca-snapshot.sh`만 가져온 후 기존 AWS 프로필로 `.\scripts\remote.ps1 -ScriptPath .\scripts\inspect-orca-snapshot.sh`를 실행한다. SSM 실행 이력은 남지만 이 스크립트는 설정 변경이나 자격 증명 읽기를 하지 않는다.

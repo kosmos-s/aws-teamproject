@@ -8,6 +8,7 @@ Conflicts=shutdown.target
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/kosmos-orca-projects/firewall.env
 ExecStart=/usr/bin/python3 /opt/kosmos-portal/deploy/orca-imds-firewall.py
 ExecReload=/usr/bin/python3 /opt/kosmos-portal/deploy/orca-imds-firewall.py
 RemainAfterExit=yes

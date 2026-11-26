@@ -32,9 +32,9 @@ if [[ "$(systemctl show -p FragmentPath --value "$unit" 2>/dev/null)" != "$unit_
   printf 'unit: unexpected active location or overrides; operator review required\n'
   checks_failed=1
 fi
-check_hash app_config "$app/app/config.py" 87d8617dcf99868249cfe6b4d44396d85cc916ebc2ec897edc699b05cd2dcaea 9e5a0cae29c4344d097a6ebf5dbeb14360fc4e01ffc856362d90274b203be7b7
+check_hash app_config "$app/app/config.py" 87d8617dcf99868249cfe6b4d44396d85cc916ebc2ec897edc699b05cd2dcaea 87cfc0b8b83a298bbe31115eaf4337d394014708959d715424eb0855c5fa7a2a
 check_hash app_orca_admin "$app/app/orca_admin.py" 887a9a02af35a403d37a4c8036c34c8a1b5a92f5123459350dbf85c85f7fd187 b0d05bc513d41f2ae456ceb106fb0cb50643d3db7118df796c4dcea4fe8e88ee
-check_hash worker "$app/deploy/orca-link-worker.py" ea2fef6526e5a7d5c3d8c8f75c2749d51272fe55cd8c72058535068fde0d5da6 d9c2d560f3b09f735d715a1a2eeeeb1cea56e15e8afb60ecfda7cf60b4a409a9
+check_hash worker "$app/deploy/orca-link-worker.py" ea2fef6526e5a7d5c3d8c8f75c2749d51272fe55cd8c72058535068fde0d5da6 f9d608721086d68b18232651fa0bb759d0a51fe44ea0282ea1d4517d04bd55e5
 check_hash installed_unit "$unit_file" 11b3649d098345a1ac9d2e384e68f070076d0570e37143d91e73b8d67c4e53d9 57088f1211f0594cc2d1f1da4b87c0d344f11bf59b55257ba24967654bd301a7
 
 for service in kosmos-portal.service kosmos-orca-link.timer; do

@@ -137,11 +137,20 @@ class RepositoryKeyTests(unittest.TestCase):
             worker.subprocess, "run", return_value=SimpleNamespace(returncode=0)
         ) as run:
             worker.as_orca(["git", "--version"], 10)
-        env = run.call_args.kwargs.get("env", {})
-        self.assertTrue(env)
-        self.assertNotIn("DATABASE_URL", env)
-        self.assertNotIn("AWS_SECRET_ACCESS_KEY", env)
-        self.assertNotIn("private-fixture", repr(run.call_args))
+            env = run.call_args.kwargs.get("env", {})
+            self.assertTrue(env)
+            self.assertNotIn("DATABASE_URL", env)
+            self.assertNotIn("AWS_SECRET_ACCESS_KEY", env)
+            self.assertNotIn("private-fixture", repr(run.call_args))
+            home = Path("/var/lib/kosmos-orca-projects/14")
+            worker.run_as_orca("kosmos-orca-p14", home, ["orca-ide", "status", "--json"], 10,
+                               user_data=home / ".config" / "orca")
+            command = run.call_args.args[0]
+            self.assertEqual(command[0], "/usr/bin/systemd-run")
+            self.assertIn("--uid=kosmos-orca-p14", command)
+            self.assertIn("--property=SocketBindDeny=tcp:18000-18999", command)
+            self.assertIn(str(home / ".config" / "orca"), run.call_args.kwargs["env"].values())
+            self.assertNotIn("private-fixture", repr(run.call_args))
 
     def test_owner_backup_v4_preserves_ownership_without_private_key_or_live_jobs(self):
         pid = self.project()

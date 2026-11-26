@@ -76,27 +76,34 @@ def session_policy(db, row, *, developer=False):
     return u
 
 
-def live_developer(db, hashed):
-    # Same persisted idle/expiry/blocked/forced-password policy in one indexed query.
-    return (
-        db.scalar(
-            select(User.id)
-            .join(LoginSession, LoginSession.user_id == User.id)
-            .join(
-                SessionActivity, SessionActivity.token_hash == LoginSession.token_hash
-            )
-            .outerjoin(BlockedUser, BlockedUser.user_id == User.id)
-            .outerjoin(UserActivity, UserActivity.user_id == User.id)
-            .where(
-                LoginSession.token_hash == hashed,
-                LoginSession.expires > time.time(),
-                SessionActivity.last_active > time.time() - idle_seconds(),
-                User.role.in_(["admin", "member"]),
-                BlockedUser.user_id.is_(None),
-                or_(UserActivity.user_id.is_(None), UserActivity.must_change == 0),
-            )
+def live_developer(db, hashed, project_id=None):
+    # Keep the existing session checks before looking up project access.
+    developer = db.execute(
+        select(User.username, User.role)
+        .join(LoginSession, LoginSession.user_id == User.id)
+        .join(SessionActivity, SessionActivity.token_hash == LoginSession.token_hash)
+        .outerjoin(BlockedUser, BlockedUser.user_id == User.id)
+        .outerjoin(UserActivity, UserActivity.user_id == User.id)
+        .where(
+            LoginSession.token_hash == hashed,
+            LoginSession.expires > time.time(),
+            SessionActivity.last_active > time.time() - idle_seconds(),
+            User.role.in_(["admin", "member"]),
+            BlockedUser.user_id.is_(None),
+            or_(UserActivity.user_id.is_(None), UserActivity.must_change == 0),
         )
-        is not None
+    ).one_or_none()
+    if developer is None:
+        return False
+    if project_id is None:
+        return True
+    from .extras import can_see_project
+    from .models import OrcaProject, Project
+
+    return (
+        db.get(Project, project_id) is not None
+        and db.get(OrcaProject, project_id) is not None
+        and can_see_project(db, {"username": developer.username, "role": developer.role}, project_id)
     )
 
 
